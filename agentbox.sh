@@ -296,14 +296,22 @@ function cmd_start() {
 	fi
 
 	# Sanitize branch name: replace slashes with dashes
-	container_name="agentbox-${branch_name//\//-}"
+	local sanitized_branch="${branch_name//\//-}"
 
 	if [[ "${no_git}" -eq 1 ]]; then
 		worktree_path="$(pwd)"
 		printf 'Running without git — mounting current directory\n'
+		# Use current directory name to make container name unique per project
+		local project_name
+		project_name="$(basename "$(pwd)")"
+		container_name="agentbox-${project_name}-${sanitized_branch}"
 	else
 		git_root="$(get_git_root)"
 		worktree_path="${git_root}/agentbox-worktrees/${branch_name}"
+		# Use git root directory name to make container name unique per project
+		local project_name
+		project_name="$(basename "${git_root}")"
+		container_name="agentbox-${project_name}-${sanitized_branch}"
 	fi
 
 	check_no_active_session
