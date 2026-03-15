@@ -291,6 +291,13 @@ function cmd_start() {
 		exit 22 # EINVAL
 	fi
 
+	# Create agent config directory if it doesn't exist
+	local config_dir="${AGENT_CONFIG_DIRS[${agent_type}]}"
+	if [[ ! -d "${config_dir}" ]]; then
+		printf 'Creating agent config directory: %s\n' "${config_dir}"
+		mkdir -p "${config_dir}"
+	fi
+
 	if [[ -z "${branch_name}" ]]; then
 		branch_name="agentbox-$(date --iso-8601)"
 	fi
