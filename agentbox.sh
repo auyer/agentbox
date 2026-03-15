@@ -57,10 +57,35 @@ function usage() {
 	printf '  --dangerously-skip-permissions\n'
 	printf '                            Run agent in yolo mode\n'
 	printf '                            (off by default)\n'
+	printf '  --no-git                  Run without a git repository.\n'
+	printf '                            Mounts the current directory;\n'
+	printf '                            skips worktree and branch creation\n'
 	printf '\nGlobal options:\n'
 	printf '  -v, --verbose             Print container commands before\n'
 	printf '                            running them\n'
 }
+
+function print_worktree_hint()
+{
+	local path="${1}"
+	printf '\n'
+	printf 'The agent session ended. Code changes are in:\n'
+	printf '  %s\n' "${path}"
+	printf 'Review the changes there before merging into your main branch.\n'
+}
+
+# Print the worktree hint on any exit so changes are never silently lost.
+function _on_exit()
+{
+	if [[ -f "${STATE_FILE}" ]]; then
+		# shellcheck source=/dev/null
+		source "${STATE_FILE}"
+		if [[ -n "${WORKTREE_PATH:-}" ]]; then
+			print_worktree_hint "${WORKTREE_PATH}"
+		fi
+	fi
+}
+trap '_on_exit' EXIT
 
 # Run a command, printing it first when verbose mode is on.
 function run_cmd() {
@@ -207,6 +232,7 @@ function cmd_start() {
 	local autostart=1
 	local use_devbox=1
 	local yolo=0
+	local no_git=0
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_cmd
 	local -a run_args
@@ -237,6 +263,10 @@ function cmd_start() {
 			yolo=1
 			shift
 			;;
+		--no-git)
+			no_git=1
+			shift
+			;;
 		-*)
 			printf 'ERROR: unknown option: %s\n' "${1}" >&2
 			usage
@@ -261,43 +291,51 @@ function cmd_start() {
 		exit 22 # EINVAL
 	fi
 
-	git_root="$(get_git_root)"
-	check_no_active_session
-
 	if [[ -z "${branch_name}" ]]; then
 		branch_name="agentbox-$(date --iso-8601)"
 	fi
 
 	# Sanitize branch name: replace slashes with dashes
 	container_name="agentbox-${branch_name//\//-}"
-	worktree_path="${git_root}/agentbox-worktrees/${branch_name}"
 
+	if [[ "${no_git}" -eq 1 ]]; then
+		worktree_path="$(pwd)"
+		printf 'Running without git — mounting current directory\n'
+	else
+		git_root="$(get_git_root)"
+		worktree_path="${git_root}/agentbox-worktrees/${branch_name}"
+	fi
+
+	check_no_active_session
 	cmd="$(detect_container_cmd)"
 
-	if [[ "${use_stash}" -eq 1 ]]; then
-		printf 'Stashing current changes...\n'
-		git stash
-	fi
-
-	if [[ -d "${worktree_path}" ]]; then
-		printf 'Worktree already exists at %s, reusing...\n' "${worktree_path}"
-	else
-		printf 'Creating worktree at %s...\n' "${worktree_path}"
-		local branch_flag='-b'
-		if git -C "${git_root}" branch --list "${branch_name}" |
-			grep -q .; then
-			branch_flag=''
+	if [[ "${no_git}" -eq 0 ]]; then
+		if [[ "${use_stash}" -eq 1 ]]; then
+			printf 'Stashing current changes...\n'
+			git stash
 		fi
-		if [[ -n "${branch_flag}" ]]; then
-			git worktree add "${worktree_path}" -b "${branch_name}"
+
+		if [[ -d "${worktree_path}" ]]; then
+			printf 'Worktree already exists at %s, reusing...\n' \
+				"${worktree_path}"
 		else
-			git worktree add "${worktree_path}" "${branch_name}"
+			printf 'Creating worktree at %s...\n' "${worktree_path}"
+			local branch_flag='-b'
+			if git -C "${git_root}" branch --list "${branch_name}" |
+				grep -q .; then
+				branch_flag=''
+			fi
+			if [[ -n "${branch_flag}" ]]; then
+				git worktree add "${worktree_path}" -b "${branch_name}"
+			else
+				git worktree add "${worktree_path}" "${branch_name}"
+			fi
 		fi
-	fi
 
-	if [[ "${use_stash}" -eq 1 ]]; then
-		printf 'Applying stash to new worktree...\n'
-		git -C "${worktree_path}" stash pop
+		if [[ "${use_stash}" -eq 1 ]]; then
+			printf 'Applying stash to new worktree...\n'
+			git -C "${worktree_path}" stash pop
+		fi
 	fi
 
 	printf 'Building container image...\n'
@@ -314,7 +352,8 @@ CONTAINER_NAME=${container_name}
 WORKTREE_PATH=${worktree_path}
 BRANCH_NAME=${branch_name}
 AGENT_TYPE=${agent_type}
-GIT_ROOT=${git_root}
+GIT_ROOT=${git_root:-}
+NO_GIT=${no_git}
 EOF
 
 	mapfile -t run_args < <(
@@ -390,17 +429,14 @@ function cmd_stop() {
 	run_cmd "${cmd}" stop "${CONTAINER_NAME}" 2>/dev/null || true
 	run_cmd "${cmd}" rm "${CONTAINER_NAME}" 2>/dev/null || true
 
-	printf "Remove worktree and branch '%s'? [y/N] " "${BRANCH_NAME}"
-	read -r answer
-	if [[ "${answer}" =~ ^[Yy]$ ]]; then
-		printf 'Removing worktree at %s...\n' "${WORKTREE_PATH}"
-		git worktree remove --force "${WORKTREE_PATH}" 2>/dev/null || true
-		printf "Deleting branch '%s'...\n" "${BRANCH_NAME}"
-		git -C "${GIT_ROOT}" branch -D "${BRANCH_NAME}" 2>/dev/null || true
-	fi
-
+	# Remove state file before exit so the EXIT trap does not double-print.
+	# The hint is printed explicitly here instead.
+	local worktree_path_snapshot="${WORKTREE_PATH}"
 	rm --force "${STATE_FILE}"
 	printf 'Session stopped.\n'
+	if [[ -n "${worktree_path_snapshot}" ]]; then
+		print_worktree_hint "${worktree_path_snapshot}"
+	fi
 }
 
 function cmd_resume() {

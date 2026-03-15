@@ -3,6 +3,7 @@
 Run LLM coding agents in an isolated container, locked to a dedicated git
 worktree. Each session gets its own branch, its own container, and no access
 to the rest of your repository's git history.
+Install packages with [Devbox](https://www.jetify.com/devbox), for maximum flexibility without custom images.
 
 ## Overview
 
@@ -57,19 +58,23 @@ the rc file.
 ### agentbox start
 
 Creates a git worktree on a new branch, builds the container image, and
-launches the agent inside the container.
+launches the agent inside the container. When `--no-git` is passed, the git
+steps are skipped and the current directory is mounted directly.
 
     agentbox start [BRANCH] [OPTIONS]
 
 **BRANCH**
 
-The name of the git branch and worktree to create. Defaults to
-`agentbox-<ISO date>` (e.g. `agentbox-2026-03-16`). Slashes in the branch
-name are replaced with dashes for the container name.
+The name of the git branch and worktree to create, or a session label when
+using `--no-git`. Defaults to `agentbox-<ISO date>` (e.g.
+`agentbox-2026-03-16`). Slashes are replaced with dashes when deriving the
+container name.
 
-The worktree is created at `<git-root>/agentbox-worktrees/<branch>`. If the
-directory already exists it is reused without error, allowing a session to be
-restarted on the same branch.
+In git mode the worktree is created at
+`<git-root>/agentbox-worktrees/<branch>`. If the directory already exists it
+is reused without error, allowing a session to be restarted on the same
+branch. In `--no-git` mode this argument serves only as a label for the
+container name.
 
 **Options**
 
@@ -109,17 +114,30 @@ By default, if `devbox.json` is detected, the agent is launched inside
 Pass `--dangerously-skip-permissions` to the agent CLI at launch. This
 disables the agent's interactive permission prompts. Off by default.
 
+    --no-git
+
+Start a session without a git repository. The current working directory is
+mounted as the workspace instead of a dedicated worktree. Branch creation,
+stash, and worktree removal steps are skipped entirely. Useful for running an
+agent against a plain directory or a project that does not use git.
+
 ---
 
 ### agentbox stop
 
-Stops and removes the running container, then prompts whether to also delete
-the worktree directory and the git branch.
+Stops and removes the running container, then prints the path to the worktree
+where the agent made its changes.
 
     agentbox stop
 
-If the worktree and branch are kept, the session can be restarted later with
+The worktree and its branch are never deleted automatically. After stopping,
+review the changes in the printed directory and merge them manually when
+ready. The session can be restarted on the same branch with
 `agentbox start <branch>`.
+
+The worktree path is also printed whenever agentbox exits for any reason,
+including container exit, script interruption, or failure. This ensures the
+location of any uncommitted changes is never silently lost.
 
 ---
 
@@ -257,11 +275,11 @@ container name is detected) or print an error.
 
 When `agentbox start` is invoked the following steps occur in order:
 
-1. Verify the current directory is inside a git repository.
+1. Verify the current directory is inside a git repository (skipped with `--no-git`).
 2. Check that no session is already active.
-3. Stash changes in the current worktree (if `--use-stash`).
-4. Create the git worktree and branch (or reuse if already present).
-5. Pop the stash into the new worktree (if `--use-stash`).
+3. Stash changes in the current worktree if `--use-stash` (skipped with `--no-git`).
+4. Create the git worktree and branch, or reuse if already present (skipped with `--no-git`).
+5. Pop the stash into the new worktree if `--use-stash` (skipped with `--no-git`).
 6. Build the container image with the caller's UID/GID as build args.
 7. Write the state file.
 8. If the container name already exists and is running, attach to it.
@@ -270,3 +288,6 @@ When `agentbox start` is invoked the following steps occur in order:
     a. Source `custom_configs.sh` (if present).
     b. Install the agent via npm.
     c. Launch the agent CLI (or `devbox shell`, or `bash` depending on flags).
+11. On exit — whether the container exits normally, the script is interrupted,
+    or a failure occurs — print the worktree path so the user knows where to
+    find the agent's changes.
