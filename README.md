@@ -253,6 +253,30 @@ workflow configurations.
 
 ---
 
+## Shell Completion
+
+Tab completion is available for bash and zsh after installation. The completion
+script is automatically sourced in your shell rc file during installation.
+
+Completion includes:
+
+- Subcommands: `start`, `stop`, `resume`, `help`
+- Options: `-v`, `--verbose`, `-s`, `--use-stash`, `--agent`, etc.
+- Agent types: `claude-code`, `qwen-code`, `opencode-ai`
+
+### Manual Setup
+
+If completion doesn't work automatically, add this to your shell rc file:
+
+    # bash
+    source "${HOME}/.local/bin/agentbox/agentbox.completion"
+
+    # zsh
+    autoload -Uz compinit && compinit
+    source "${HOME}/.local/bin/agentbox/agentbox.completion"
+
+---
+
 ## Session state
 
 agentbox stores the active session in `.agentbox-state` in the installation

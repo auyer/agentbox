@@ -8,6 +8,7 @@ PATH_MARKER='# agentbox'
 FILES_TO_COPY=(
   'Containerfile'
   'agentbox.sh'
+  'agentbox.completion'
   'auto_envs.sh'
   'custom_configs.sh'
   'setup.sh'
@@ -73,6 +74,17 @@ function cmd_install()
     printf 'Added PATH entry to %s\n' "${rc_file}"
   fi
 
+  # Add completion sourcing to rc file
+  local completion_marker='# agentbox completion'
+  if grep --quiet --fixed-strings "${completion_marker}" "${rc_file}" 2>/dev/null; then
+    printf 'Completion already configured in %s\n' "${rc_file}"
+  else
+    printf '\n%s\n' "${completion_marker}" >> "${rc_file}"
+    printf 'source "${HOME}/.local/bin/agentbox/agentbox.completion"\n' \
+      >> "${rc_file}"
+    printf 'Added completion to %s\n' "${rc_file}"
+  fi
+
   printf '\nDone! Restart your shell or run:\n'
   printf '  source %s\n' "${rc_file}"
 }
@@ -110,6 +122,29 @@ function cmd_uninstall()
     printf 'Removed PATH entry from %s\n' "${rc_file}"
   else
     printf 'No PATH entry found in %s\n' "${rc_file}"
+  fi
+
+  # Remove completion sourcing from rc file
+  local completion_marker='# agentbox completion'
+  if grep --quiet --fixed-strings "${completion_marker}" "${rc_file}" 2>/dev/null; then
+    local tmp skip_next
+    tmp="$(mktemp)"
+    skip_next=0
+    while IFS= read -r line; do
+      if [[ "${line}" == *"${completion_marker}"* ]]; then
+        skip_next=1
+        continue
+      fi
+      if [[ "${skip_next}" -eq 1 ]] && [[ "${line}" == *'agentbox.completion'* ]]; then
+        skip_next=0
+        continue
+      fi
+      printf '%s\n' "${line}" >> "${tmp}"
+    done < "${rc_file}"
+    mv "${tmp}" "${rc_file}"
+    printf 'Removed completion from %s\n' "${rc_file}"
+  else
+    printf 'No completion entry found in %s\n' "${rc_file}"
   fi
 
   printf 'Uninstall complete.\n'

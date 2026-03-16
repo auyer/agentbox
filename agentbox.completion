@@ -1,0 +1,103 @@
+# Shell completion for agentbox
+# Supports both bash and zsh
+
+_agentbox_complete() {
+  local cur prev words cword
+  local -a cmds opts agent_types
+
+  # Initialize completion for bash
+  if type _init_completion >/dev/null 2>&1; then
+    _init_completion || return
+  fi
+
+  cmds=(start stop resume help)
+  opts=(
+    -v
+    --verbose
+    -s
+    --use-stash
+    --agent
+    --no-autostart
+    --no-devbox
+    --dangerously-skip-permissions
+    --no-git
+    --help
+    -h
+  )
+  agent_types=(claude-code qwen-code opencode-ai)
+
+  # Determine current command context
+  if [[ ${cword} -eq 1 ]]; then
+    # Completing the first argument (subcommand)
+    COMPREPLY=($(compgen -W "${cmds[*]}" -- "${cur}"))
+    return
+  fi
+
+  # Check if we're after a subcommand
+  local subcommand="${words[1]}"
+
+  case "${subcommand}" in
+    start)
+      if [[ "${cur}" == -* ]]; then
+        # Completing options
+        COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
+      elif [[ "${prev}" == "--agent" ]]; then
+        # Completing agent type
+        COMPREPLY=($(compgen -W "${agent_types[*]}" -- "${cur}"))
+      else
+        # Completing branch name or options
+        COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
+      fi
+      ;;
+    stop|resume|help)
+      # No additional arguments for these commands
+      COMPREPLY=()
+      ;;
+    *)
+      # Unknown subcommand, suggest options and commands
+      COMPREPLY=($(compgen -W "${cmds[*]} ${opts[*]}" -- "${cur}"))
+      ;;
+  esac
+}
+
+# Bash completion
+if type complete >/dev/null 2>&1; then
+  complete -F _agentbox_complete agentbox
+fi
+
+# Zsh completion
+if type compdef >/dev/null 2>&1; then
+  _agentbox_zsh() {
+    local -a cmds opts agent_types
+    cmds=('start:Start a new agent session' 'stop:Stop the current session' 'resume:Resume a running session' 'help:Show help')
+    opts=('-v:Verbose output' '--verbose:Verbose output' '-s:Use stash' '--use-stash:Use stash' '--agent:Agent type' '--no-autostart:Skip autostart' '--no-devbox:Skip devbox' '--dangerously-skip-permissions:Skip permissions' '--no-git:No git mode' '--help:Show help' '-h:Show help')
+    agent_types=('claude-code' 'qwen-code' 'opencode-ai')
+
+    _arguments -s -S \
+      "1: :->cmds" \
+      "2: :->args" \
+      && return
+
+    case "${state}" in
+      cmds)
+        _describe 'commands' cmds
+        ;;
+      args)
+        case "${words[1]}" in
+          start)
+            _arguments \
+              "${opts[@]}" \
+              "--agent[Agent type]:agent type:(${agent_types[*]})" \
+              ":branch name:_files" \
+              && return
+            ;;
+          stop|resume|help)
+            # No additional arguments
+            ;;
+        esac
+        _describe 'options' opts
+        ;;
+    esac
+  }
+  compdef _agentbox_zsh agentbox
+fi
