@@ -2,7 +2,7 @@
 set -euo pipefail
 
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_FILE="${AGENT_DIR}/.agentbox-state"
+STATE_DIR="${AGENT_DIR}/.agentbox-state"
 VERBOSE=0
 
 # Agent type → host config dir
@@ -32,6 +32,16 @@ declare -A AGENT_CLI_CMDS=(
 	['qwen-code']='qwen'
 	['opencode-ai']='opencode'
 )
+
+function get_state_file() {
+	local project_name git_root
+	if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+		project_name="$(basename "${git_root}")"
+	else
+		project_name="$(basename "$(pwd)")"
+	fi
+	printf '%s/%s.state' "${STATE_DIR}" "${project_name}"
+}
 
 function usage() {
 	printf 'Usage: agentbox <command> [options]\n'
@@ -77,9 +87,11 @@ function print_worktree_hint()
 # Print the worktree hint on any exit so changes are never silently lost.
 function _on_exit()
 {
-	if [[ -f "${STATE_FILE}" ]]; then
+	local state_file
+	state_file="$(get_state_file)"
+	if [[ -f "${state_file}" ]]; then
 		# shellcheck source=/dev/null
-		source "${STATE_FILE}"
+		source "${state_file}"
 		if [[ -n "${WORKTREE_PATH:-}" ]]; then
 			print_worktree_hint "${WORKTREE_PATH}"
 		fi
@@ -120,22 +132,25 @@ function get_git_root() {
 }
 
 function read_state() {
-	if [[ ! -f "${STATE_FILE}" ]]; then
+	local state_file
+	state_file="$(get_state_file)"
+	if [[ ! -f "${state_file}" ]]; then
 		printf 'ERROR: no active session (state file not found)\n' >&2
 		printf 'Hint: run "agent start" to begin a new session\n' >&2
 		exit 2 # ENOENT
 	fi
 	# shellcheck source=/dev/null
-	source "${STATE_FILE}"
+	source "${state_file}"
 }
 
 function check_no_active_session() {
-	local cmd running
-	if [[ ! -f "${STATE_FILE}" ]]; then
+	local cmd running state_file
+	state_file="$(get_state_file)"
+	if [[ ! -f "${state_file}" ]]; then
 		return 0
 	fi
 	# shellcheck source=/dev/null
-	source "${STATE_FILE}"
+	source "${state_file}"
 	cmd="$(detect_container_cmd)"
 	running="$(
 		run_cmd "${cmd}" inspect "${CONTAINER_NAME}" \
@@ -323,6 +338,7 @@ function cmd_start() {
 
 	check_no_active_session
 	cmd="$(detect_container_cmd)"
+	mkdir -p "${STATE_DIR}"
 
 	if [[ "${no_git}" -eq 0 ]]; then
 		if [[ "${use_stash}" -eq 1 ]]; then
@@ -362,7 +378,8 @@ function cmd_start() {
 		"${AGENT_DIR}"
 
 	# Write state file before launching container
-	cat >"${STATE_FILE}" <<EOF
+	local state_file="${STATE_DIR}/${project_name}.state"
+	cat >"${state_file}" <<EOF
 CONTAINER_NAME=${container_name}
 WORKTREE_PATH=${worktree_path}
 BRANCH_NAME=${branch_name}
@@ -436,7 +453,8 @@ EOF
 }
 
 function cmd_stop() {
-	local cmd answer
+	local cmd answer state_file
+	state_file="$(get_state_file)"
 	read_state
 	cmd="$(detect_container_cmd)"
 
@@ -447,7 +465,7 @@ function cmd_stop() {
 	# Remove state file before exit so the EXIT trap does not double-print.
 	# The hint is printed explicitly here instead.
 	local worktree_path_snapshot="${WORKTREE_PATH}"
-	rm --force "${STATE_FILE}"
+	rm --force "${state_file}"
 	printf 'Session stopped.\n'
 	if [[ -n "${worktree_path_snapshot}" ]]; then
 		print_worktree_hint "${worktree_path_snapshot}"
