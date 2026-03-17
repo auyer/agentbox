@@ -427,7 +427,15 @@ EOF
 
 	local launch_cmd
 	if [[ "${has_devbox}" -eq 1 ]] && [[ "${autostart}" -eq 1 ]]; then
-		launch_cmd="devbox shell --command '${cli_cmd}'"
+		# Capture the PATH where npm installed the CLI, then enter devbox
+		# and restore that PATH so the globally-installed CLI is found
+		local cli_path
+		cli_path="$(dirname "$(command -v "${cli_cmd}" 2>/dev/null || printf '')")"
+		if [[ -n "${cli_path}" ]]; then
+			launch_cmd="eval \"\$(devbox shell --print-env)\"; export PATH=\"${cli_path}:\${PATH}\"; exec ${cli_cmd}"
+		else
+			launch_cmd="eval \"\$(devbox shell --print-env)\"; exec ${cli_cmd}"
+		fi
 	elif [[ "${has_devbox}" -eq 1 ]]; then
 		launch_cmd='devbox shell'
 	elif [[ "${autostart}" -eq 1 ]]; then
