@@ -5,18 +5,12 @@ AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${AGENT_DIR}/.agentbox-state"
 VERBOSE=0
 
-# Agent type → host config dir
+# Agent type → host:container config dir pairs
+# Host folder stays the same for all tools; container folder differs for opencode-ai
 declare -A AGENT_CONFIG_DIRS=(
-	['claude-code']="${HOME}/.claude"
-	['qwen-code']="${HOME}/.qwen"
-	['opencode-ai']="${HOME}/.opencode"
-)
-
-# Agent type → container config dir
-declare -A AGENT_CONTAINER_DIRS=(
-	['claude-code']='/home/devbox/.claude'
-	['qwen-code']='/home/devbox/.qwen'
-	['opencode-ai']='/home/devbox/.opencode'
+	['claude-code']="${HOME}/.claude:/home/devbox/.claude"
+	['qwen-code']="${HOME}/.qwen:/home/devbox/.qwen"
+	['opencode-ai']="${HOME}/.opencode:/home/devbox/.local/share/opencode"
 )
 
 # Agent type → npm install command
@@ -170,11 +164,12 @@ function build_run_args() {
 	local worktree_path="${2}"
 	local container_name="${3}"
 	local agent_type="${4}"
-	local config_dir container_config_dir
+	local config_pair container_config_dir config_dir
 	local -a args
 
-	config_dir="${AGENT_CONFIG_DIRS[${agent_type}]}"
-	container_config_dir="${AGENT_CONTAINER_DIRS[${agent_type}]}"
+	config_pair="${AGENT_CONFIG_DIRS[${agent_type}]}"
+	config_dir="${config_pair%%:*}"
+	container_config_dir="${config_pair#*:}"
 
 	args=(
 		'--interactive'
@@ -307,7 +302,8 @@ function cmd_start() {
 	fi
 
 	# Create agent config directory if it doesn't exist
-	local config_dir="${AGENT_CONFIG_DIRS[${agent_type}]}"
+	local config_pair="${AGENT_CONFIG_DIRS[${agent_type}]}"
+	local config_dir="${config_pair%%:*}"
 	if [[ ! -d "${config_dir}" ]]; then
 		printf 'Creating agent config directory: %s\n' "${config_dir}"
 		mkdir -p "${config_dir}"
