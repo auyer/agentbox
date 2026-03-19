@@ -203,7 +203,7 @@ The following variables are always set inside the container:
 | `HOME`                    | `/home/devbox`               |
 | `CLAUDE_CONFIG_DIR`       | `/home/devbox/.claude`       |
 
-Additional variables are forwarded from the host via `auto_envs.sh` (see
+Additional variables are forwarded from the host via `auto_envs.conf` (see
 below).
 
 ---
@@ -213,7 +213,7 @@ below).
 All configuration files live in the agentbox installation directory alongside
 the `agentbox` executable.
 
-### auto_envs.sh
+### auto_envs.conf
 
 Lists host environment variable names to forward into the container. One
 name per line. Comments (lines starting with `#` or trailing after `#`) and
@@ -228,7 +228,7 @@ Example:
 
 If a listed variable is not set on the host it is silently skipped.
 
-### custom_configs.sh
+### pre_start.sh
 
 A shell script sourced inside the container before the agent is installed.
 Because it is sourced (not executed in a subshell), `export` statements
@@ -309,7 +309,7 @@ When `agentbox start` is invoked the following steps occur in order:
 8. If the container name already exists and is running, attach to it.
 9. If the container name exists but is stopped, remove it and start fresh.
 10. Inside the new container, in order:
-    a. Source `custom_configs.sh` (if present).
+    a. Source `pre_start.sh` (if present).
     b. Install the agent via npm.
     c. Launch the agent CLI (or `devbox shell`, or `bash` depending on flags).
 11. On exit — whether the container exits normally, the script is interrupted,

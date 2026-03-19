@@ -232,11 +232,11 @@ function parse_mount_spec() {
 	printf '%s\n' "--volume=${host}:${container}${option_str}"
 }
 
-# Read default_mounts.txt and emit --volume= args for each valid entry.
+# Read default_mounts.conf and emit --volume= args for each valid entry.
 # Usage: read_mounts_file <selinux_suffix>
 function read_mounts_file() {
 	local selinux="${1}"
-	local mounts_file="${AGENT_DIR}/default_mounts.txt"
+	local mounts_file="${AGENT_DIR}/default_mounts.conf"
 	[[ -f "${mounts_file}" ]] || return 0
 	local line
 	while IFS= read -r line; do
@@ -284,7 +284,7 @@ function build_run_args() {
 	args+=("--volume=${worktree_path}:/home/devbox/app${selinux}")
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
-	# Mounts from default_mounts.txt
+	# Mounts from default_mounts.conf
 	local mount_spec
 	while IFS= read -r mount_spec; do
 		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
@@ -297,9 +297,9 @@ function build_run_args() {
 		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
 	done
 
-	# Forward host env vars listed in auto_envs.sh into the container.
+	# Forward host env vars listed in auto_envs.conf into the container.
 	# Lines starting with # and blank lines are ignored.
-	if [[ -f "${AGENT_DIR}/auto_envs.sh" ]]; then
+	if [[ -f "${AGENT_DIR}/auto_envs.conf" ]]; then
 		local var_name
 		while IFS= read -r var_name; do
 			# Strip inline comments and surrounding whitespace
@@ -309,7 +309,7 @@ function build_run_args() {
 			if [[ -v "${var_name}" ]]; then
 				args+=("--env=${var_name}=${!var_name}")
 			fi
-		done < "${AGENT_DIR}/auto_envs.sh"
+		done < "${AGENT_DIR}/auto_envs.conf"
 	fi
 
 	printf '%s\n' "${args[@]}"
@@ -528,14 +528,14 @@ EOF
 		launch_cmd='exec bash'
 	fi
 
-	# If custom_configs.sh exists, base64-encode it on the host and
+	# If pre_start.sh exists, base64-encode it on the host and
 	# decode+run it inside the container as the very first step.
-	# The base64 encoding handles multi-line content, 
+	# The base64 encoding handles multi-line content,
 	# special characters, and quotes without any escaping issues.
 	local custom_cfg_cmd=''
-	if [[ -f "${AGENT_DIR}/custom_configs.sh" ]]; then
+	if [[ -f "${AGENT_DIR}/pre_start.sh" ]]; then
 		local encoded
-		encoded="$(base64 --wrap=0 "${AGENT_DIR}/custom_configs.sh")"
+		encoded="$(base64 --wrap=0 "${AGENT_DIR}/pre_start.sh")"
 		custom_cfg_cmd="source <(echo '${encoded}' | base64 --decode); "
 	fi
 

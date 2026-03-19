@@ -9,10 +9,17 @@ FILES_TO_COPY=(
   'Containerfile'
   'agentbox.sh'
   'agentbox.completion'
-  'auto_envs.sh'
-  'custom_configs.sh'
-  'default_mounts.txt'
+  'auto_envs.conf'
+  'pre_start.sh'
+  'default_mounts.conf'
   'setup.sh'
+)
+
+# Files that may contain user edits — prompt before overwriting
+CONFIG_FILES=(
+  'auto_envs.conf'
+  'pre_start.sh'
+  'default_mounts.conf'
 )
 
 function usage()
@@ -48,15 +55,28 @@ function cmd_install()
   printf 'Installing agentbox to %s...\n' "${INSTALL_DIR}"
   mkdir -p "${INSTALL_DIR}"
 
-  local f
+  local f is_config dest answer
   for f in "${FILES_TO_COPY[@]}"; do
     local src="${SCRIPT_DIR}/${f}"
-    if [[ -f "${src}" ]]; then
-      cp "${src}" "${INSTALL_DIR}/${f}"
-      printf '  copied %s\n' "${f}"
-    else
+    if [[ ! -f "${src}" ]]; then
       printf '  WARNING: %s not found, skipping\n' "${f}" >&2
+      continue
     fi
+    dest="${INSTALL_DIR}/${f}"
+    is_config=0
+    for c in "${CONFIG_FILES[@]}"; do
+      [[ "${f}" == "${c}" ]] && is_config=1 && break
+    done
+    if [[ "${is_config}" -eq 1 ]] && [[ -f "${dest}" ]]; then
+      printf '  %s already exists. Overwrite? [y/N] ' "${f}"
+      read -r answer </dev/tty
+      if [[ "${answer}" != 'y' && "${answer}" != 'Y' ]]; then
+        printf '  skipped %s\n' "${f}"
+        continue
+      fi
+    fi
+    cp "${src}" "${dest}"
+    printf '  copied %s\n' "${f}"
   done
 
   mv "${INSTALL_DIR}/agentbox.sh" "${INSTALL_DIR}/agentbox"
@@ -86,7 +106,12 @@ function cmd_install()
     printf 'Added completion to %s\n' "${rc_file}"
   fi
 
-  printf '\nDone! Restart your shell or run:\n'
+  printf '\nInstalled to: %s\n' "${INSTALL_DIR}"
+  printf '\nCustomize your session by editing the config files:\n'
+  printf '  auto_envs.conf      — host environment variables to forward into the container (one name per line)\n'
+  printf '  pre_start.sh       — shell script sourced inside the container before the agent starts\n'
+  printf '  default_mounts.conf — extra volume mounts (host:container[:ro], one per line)\n'
+  printf '\nRestart your shell or run:\n'
   printf '  source %s\n' "${rc_file}"
 }
 
