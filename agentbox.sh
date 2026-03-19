@@ -4,6 +4,7 @@ set -euo pipefail
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${AGENT_DIR}/.agentbox-state"
 VERBOSE=0
+declare -a EXTRA_MOUNTS=()
 
 # Agent type → host:container config dir pairs
 # Host folder stays the same for all tools; container folder differs for opencode-ai
@@ -64,6 +65,10 @@ function usage() {
 	printf '  --no-git                  Run without a git repository.\n'
 	printf '                            Mounts the current directory;\n'
 	printf '                            skips worktree and branch creation\n'
+	printf '  --mount <host:container>  Mount a host path into the container.\n'
+	printf '                            Container path starting with ./ is\n'
+	printf '                            relative to /home/devbox/app.\n'
+	printf '                            Can be specified multiple times.\n'
 	printf '\nGlobal options:\n'
 	printf '  -v, --verbose             Print container commands before\n'
 	printf '                            running them\n'
@@ -159,6 +164,91 @@ function check_no_active_session() {
 	fi
 }
 
+# Expand ~ and ${HOME} / ${AGENT_DIR} in a path string.
+function normalize_mount_path() {
+	local path="${1}"
+	if [[ "${path}" == '~'* ]]; then
+		path="${HOME}${path:1}"
+	fi
+	path="${path//\$\{HOME\}/${HOME}}"
+	path="${path//\$\{AGENT_DIR\}/${AGENT_DIR}}"
+	printf '%s' "${path}"
+}
+
+# Parse a mount spec of the form host:container[:options] and print a
+# --volume= argument. Silently skips the entry if the host path does not exist.
+# Usage: parse_mount_spec <spec> <selinux_suffix>
+function parse_mount_spec() {
+	local raw_spec="${1}"
+	local selinux="${2}"
+
+	# Must contain at least one colon
+	if [[ "${raw_spec}" != *:* ]]; then
+		printf 'WARNING: ignoring malformed mount spec (no colon): %s\n' \
+			"${raw_spec}" >&2
+		return 0
+	fi
+
+	local host remainder container user_opts=''
+	host="${raw_spec%%:*}"
+	remainder="${raw_spec#*:}"
+	# remainder may be "container" or "container:opts"
+	container="${remainder%%:*}"
+	if [[ "${remainder}" == *:* ]]; then
+		user_opts="${remainder#*:}"
+	fi
+
+	if [[ -z "${container}" ]]; then
+		printf 'WARNING: ignoring mount spec with empty container path: %s\n' \
+			"${raw_spec}" >&2
+		return 0
+	fi
+
+	host="$(normalize_mount_path "${host}")"
+
+	# Rewrite relative container path to workdir-relative absolute path
+	if [[ "${container}" == './'* ]]; then
+		container="/home/devbox/app/${container:2}"
+	fi
+
+	# Skip if the host path does not exist
+	if [[ ! -e "${host}" ]]; then
+		printf 'WARNING: mount host path does not exist, skipping: %s\n' \
+			"${host}" >&2
+		return 0
+	fi
+
+	# Combine selinux (:z) and user options (e.g. ro) with a comma so that
+	# podman receives a valid option string like :z,ro
+	local option_str=''
+	if [[ -n "${selinux}" ]] && [[ -n "${user_opts}" ]]; then
+		option_str="${selinux},${user_opts}"
+	elif [[ -n "${selinux}" ]]; then
+		option_str="${selinux}"
+	elif [[ -n "${user_opts}" ]]; then
+		option_str=":${user_opts}"
+	fi
+
+	printf '%s\n' "--volume=${host}:${container}${option_str}"
+}
+
+# Read default_mounts.txt and emit --volume= args for each valid entry.
+# Usage: read_mounts_file <selinux_suffix>
+function read_mounts_file() {
+	local selinux="${1}"
+	local mounts_file="${AGENT_DIR}/default_mounts.txt"
+	[[ -f "${mounts_file}" ]] || return 0
+	local line
+	while IFS= read -r line; do
+		line="${line%%#*}"
+		# Strip leading and trailing whitespace
+		line="${line#"${line%%[![:space:]]*}"}"
+		line="${line%"${line##*[![:space:]]}"}"
+		[[ -z "${line}" ]] && continue
+		parse_mount_spec "${line}" "${selinux}"
+	done < "${mounts_file}"
+}
+
 function build_run_args() {
 	local cmd="${1}"
 	local worktree_path="${2}"
@@ -194,28 +284,18 @@ function build_run_args() {
 	args+=("--volume=${worktree_path}:/home/devbox/app${selinux}")
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
-	# SSH keys (read-only)
-	if [[ -f "${HOME}/.ssh/id_rsa" ]]; then
-		args+=(
-			"--volume=${HOME}/.ssh/:/home/devbox/.ssh/:ro"
-		)
-	fi
-	if [[ -f "${HOME}/.ssh/known_hosts" ]]; then
-		args+=(
-			"--volume=${HOME}/.ssh/known_hosts:/home/devbox/.ssh/known_hosts:ro"
-		)
-	fi
+	# Mounts from default_mounts.txt
+	local mount_spec
+	while IFS= read -r mount_spec; do
+		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
+	done < <(read_mounts_file "${selinux}")
 
-	if [[ -d "${AGENT_DIR}/skills" ]]; then
-		args+=(
-			"--volume=${AGENT_DIR}/skills:/home/devbox/app/skills${selinux}"
-		)
-	fi
-	if [[ -d "${AGENT_DIR}/workflows" ]]; then
-		args+=(
-			"--volume=${AGENT_DIR}/workflows:/home/devbox/app/workflows${selinux}"
-		)
-	fi
+	# Mounts from --mount CLI flags
+	local extra_spec
+	for extra_spec in "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}"; do
+		mount_spec="$(parse_mount_spec "${extra_spec}" "${selinux}")"
+		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
+	done
 
 	# Forward host env vars listed in auto_envs.sh into the container.
 	# Lines starting with # and blank lines are ignored.
@@ -275,6 +355,14 @@ function cmd_start() {
 			;;
 		--no-git)
 			no_git=1
+			shift
+			;;
+		--mount)
+			EXTRA_MOUNTS+=("${2}")
+			shift 2
+			;;
+		--mount=*)
+			EXTRA_MOUNTS+=("${1#--mount=}")
 			shift
 			;;
 		-*)

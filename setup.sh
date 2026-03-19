@@ -11,6 +11,7 @@ FILES_TO_COPY=(
   'agentbox.completion'
   'auto_envs.sh'
   'custom_configs.sh'
+  'default_mounts.txt'
   'setup.sh'
 )
 

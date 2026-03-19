@@ -21,6 +21,7 @@ _agentbox_complete() {
     --no-devbox
     --dangerously-skip-permissions
     --no-git
+    --mount
     --help
     -h
   )
@@ -38,12 +39,16 @@ _agentbox_complete() {
 
   case "${subcommand}" in
     start)
-      if [[ "${cur}" == -* ]]; then
-        # Completing options
-        COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
-      elif [[ "${prev}" == "--agent" ]]; then
+      if [[ "${prev}" == "--agent" ]]; then
         # Completing agent type
         COMPREPLY=($(compgen -W "${agent_types[*]}" -- "${cur}"))
+      elif [[ "${prev}" == "--mount" ]]; then
+        # Completing mount spec — offer file/directory path completion
+        COMPREPLY=($(compgen -f -- "${cur}"))
+        compopt -o filenames 2>/dev/null
+      elif [[ "${cur}" == -* ]]; then
+        # Completing options
+        COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
       else
         # Completing branch name or options
         COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
@@ -68,34 +73,38 @@ fi
 # Zsh completion
 if type compdef >/dev/null 2>&1; then
   _agentbox_zsh() {
-    local -a cmds opts agent_types
-    cmds=('start:Start a new agent session' 'stop:Stop the current session' 'resume:Resume a running session' 'help:Show help')
-    opts=('-v:Verbose output' '--verbose:Verbose output' '-s:Use stash' '--use-stash:Use stash' '--agent:Agent type' '--no-autostart:Skip autostart' '--no-devbox:Skip devbox' '--dangerously-skip-permissions:Skip permissions' '--no-git:No git mode' '--help:Show help' '-h:Show help')
-    agent_types=('claude-code' 'qwen-code' 'opencode-ai')
+    local context state state_descr line
+    typeset -A opt_args
+    local -a cmds agent_types
 
-    _arguments -s -S \
-      "1: :->cmds" \
-      "2: :->args" \
+    cmds=('start:Start a new agent session' 'stop:Stop the current session' 'resume:Resume a running session' 'help:Show help')
+    agent_types=(claude-code qwen-code opencode-ai)
+
+    _arguments -C \
+      '(-v --verbose)'{-v,--verbose}'[Verbose output]' \
+      '1: :->command' \
+      '*: :->args' \
       && return
 
-    case "${state}" in
-      cmds)
+    case $state in
+      command)
         _describe 'commands' cmds
         ;;
       args)
-        case "${words[1]}" in
+        case $line[1] in
           start)
             _arguments \
-              "${opts[@]}" \
-              "--agent[Agent type]:agent type:(${agent_types[*]})" \
-              ":branch name:_files" \
+              '(-s --use-stash)'{-s,--use-stash}'[Stash current changes and apply to new worktree]' \
+              '--agent[Agent type]:agent type:('"${agent_types[*]}"')' \
+              '--no-autostart[Do not launch the agent CLI automatically]' \
+              '--no-devbox[Skip devbox shell]' \
+              '--dangerously-skip-permissions[Run agent in yolo mode]' \
+              '--no-git[Run without git, mount current directory]' \
+              '*--mount[Mount host path into container]:mount spec:_files' \
+              ':branch name:' \
               && return
             ;;
-          stop|resume|help)
-            # No additional arguments
-            ;;
         esac
-        _describe 'options' opts
         ;;
     esac
   }
