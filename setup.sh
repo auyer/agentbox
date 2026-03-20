@@ -12,6 +12,7 @@ FILES_TO_COPY=(
 	'auto_envs.conf'
 	'pre_start.sh'
 	'default_mounts.conf'
+	'defaults.conf'
 	'setup.sh'
 )
 
@@ -20,6 +21,7 @@ CONFIG_FILES=(
 	'auto_envs.conf'
 	'pre_start.sh'
 	'default_mounts.conf'
+	'defaults.conf'
 )
 
 function usage() {
@@ -106,8 +108,9 @@ function cmd_install() {
 	printf '\nInstalled to: %s\n' "${INSTALL_DIR}"
 	printf '\nCustomize your session by editing the config files:\n'
 	printf '  auto_envs.conf      — host environment variables to forward into the container (one name per line)\n'
-	printf '  pre_start.sh       — shell script sourced inside the container before the agent starts\n'
+	printf '  pre_start.sh        — shell script sourced inside the container before the agent starts\n'
 	printf '  default_mounts.conf — extra volume mounts (host:container[:ro], one per line)\n'
+	printf '  defaults.conf       — general settings like DEFAULT_AGENT\n'
 	printf '\nRestart your shell or run:\n'
 	printf '  source %s\n' "${rc_file}"
 }

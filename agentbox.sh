@@ -334,7 +334,7 @@ function build_run_args() {
 function cmd_start() {
 	local branch_name=''
 	local use_stash=0
-	local agent_type='claude-code'
+	local agent_type
 	local autostart=1
 	local use_devbox=1
 	local yolo=0
@@ -343,6 +343,14 @@ function cmd_start() {
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_base cli_cmd
 	local -a run_args
+
+	# Load defaults from defaults.conf
+	agent_type='claude-code'
+	if [[ -f "${AGENT_DIR}/defaults.conf" ]]; then
+		# shellcheck source=/dev/null
+		source "${AGENT_DIR}/defaults.conf"
+		agent_type="${DEFAULT_AGENT:-claude-code}"
+	fi
 
 	while [[ $# -gt 0 ]]; do
 		case "${1}" in

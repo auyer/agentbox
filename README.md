@@ -257,6 +257,17 @@ Example:
     export GOPRIVATE=github.com/myorg*
     export NODE_OPTIONS=--max-old-space-size=4096
 
+### defaults.conf
+
+General configuration options for agentbox. One `key=value` pair per line.
+Lines starting with `#` are comments.
+
+Example:
+
+    # Default agent type to use when --agent is not specified
+    # Options: claude-code, qwen-code, opencode-ai, cursor
+    DEFAULT_AGENT=claude-code
+
 ### skills/ and workflows/
 
 If a `skills/` or `workflows/` directory exists in the agentbox installation
