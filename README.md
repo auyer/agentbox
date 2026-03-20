@@ -193,10 +193,16 @@ global prefix, so `npm install -g` never requires root or sudo.
 | `~/<agent-config-dir>`           | `/home/devbox/<config-dir>` | Agent credentials and config |
 | `~/.ssh/` (if present)          | `/home/devbox/.ssh/`        | Read-only                    |
 | `~/.ssh/known_hosts` (if present)| `/home/devbox/.ssh/known_hosts` | Read-only               |
+| `<git-root>/.devbox/`            | `/home/devbox/app/.devbox/` | If exists and `--no-devbox` not set |
 | `<agentbox-dir>/skills/`         | `/home/devbox/app/skills`   | If directory exists          |
 | `<agentbox-dir>/workflows/`      | `/home/devbox/app/workflows`| If directory exists          |
 | `<agentbox-dir>/cache/<agent>/npm-global` | `/home/devbox/.npm-global` | Agent installs (`npm -g`)   |
 | `<agentbox-dir>/cache/<agent>/local`      | `/home/devbox/.local`      | e.g. curl-based CLI binaries |
+
+If a `.devbox` directory exists at the git root, it is automatically mounted
+into the container at `/home/devbox/app/.devbox/`. This allows devbox package
+configurations and profiles to be shared across sessions. The mount is skipped
+if `--no-devbox` is specified.
 
 The cache directories are created automatically. Each `--agent` value has its
 own cache so installs do not collide.

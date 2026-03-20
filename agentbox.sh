@@ -257,6 +257,8 @@ function build_run_args() {
 	local worktree_path="${2}"
 	local container_name="${3}"
 	local agent_type="${4}"
+	local use_devbox="${5:-1}"
+	local git_root="${6:-}"
 	local config_pair container_config_dir config_dir
 	local -a args
 
@@ -284,6 +286,12 @@ function build_run_args() {
 	fi
 
 	args+=("--volume=${worktree_path}:/home/devbox/app${selinux}")
+
+	# Mount .devbox from git root if it exists and --no-devbox is not set.
+	if [[ "${use_devbox}" -eq 1 ]] && [[ -n "${git_root}" ]] && \
+		[[ -d "${git_root}/.devbox" ]]; then
+		args+=("--volume=${git_root}/.devbox:/home/devbox/app/.devbox${selinux}")
+	fi
 
 	# Persist npm global + ~/.local installs across sessions (per agent type).
 	# Mount cached .local before agent config so paths like
@@ -511,7 +519,7 @@ EOF
 	mapfile -t run_args < <(
 		build_run_args \
 			"${cmd}" "${worktree_path}" "${container_name}" \
-			"${agent_type}"
+			"${agent_type}" "${use_devbox}" "${git_root:-}"
 	)
 
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"
