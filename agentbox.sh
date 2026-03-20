@@ -74,8 +74,7 @@ function usage() {
 	printf '                            running them\n'
 }
 
-function print_worktree_hint()
-{
+function print_worktree_hint() {
 	local path="${1}"
 	printf '\n'
 	printf 'The agent session ended. Code changes are in:\n'
@@ -84,8 +83,7 @@ function print_worktree_hint()
 }
 
 # Print the worktree hint on any exit so changes are never silently lost.
-function _on_exit()
-{
+function _on_exit() {
 	local state_file
 	state_file="$(get_state_file)"
 	if [[ -f "${state_file}" ]]; then
@@ -246,7 +244,7 @@ function read_mounts_file() {
 		line="${line%"${line##*[![:space:]]}"}"
 		[[ -z "${line}" ]] && continue
 		parse_mount_spec "${line}" "${selinux}"
-	done < "${mounts_file}"
+	done <"${mounts_file}"
 }
 
 function build_run_args() {
@@ -309,7 +307,7 @@ function build_run_args() {
 			if [[ -v "${var_name}" ]]; then
 				args+=("--env=${var_name}=${!var_name}")
 			fi
-		done < "${AGENT_DIR}/auto_envs.conf"
+		done <"${AGENT_DIR}/auto_envs.conf"
 	fi
 
 	printf '%s\n' "${args[@]}"
