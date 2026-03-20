@@ -73,6 +73,9 @@ function cmd_install() {
 				printf '  skipped %s\n' "${f}"
 				continue
 			fi
+			# Backup existing config file before overwriting
+			mv "${dest}" "${dest}.old"
+			printf '  backed up existing %s to %s.old\n' "${f}" "${dest}"
 		fi
 		cp "${src}" "${dest}"
 		printf '  copied %s\n' "${f}"
