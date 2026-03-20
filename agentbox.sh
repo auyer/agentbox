@@ -307,6 +307,12 @@ function build_run_args() {
 		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
 	done
 
+	# Forward TERMINFO from host if set, mounting the path for terminal support.
+	if [[ -n "${TERMINFO:-}" ]]; then
+		args+=("--env=TERMINFO=${TERMINFO}")
+		args+=("--volume=${TERMINFO}:${TERMINFO}${selinux}")
+	fi
+
 	# Forward host env vars listed in auto_envs.conf into the container.
 	# Lines starting with # and blank lines are ignored.
 	if [[ -f "${AGENT_DIR}/auto_envs.conf" ]]; then
