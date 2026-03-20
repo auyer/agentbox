@@ -122,6 +122,14 @@ mounted as the workspace instead of a dedicated worktree. Branch creation,
 stash, and worktree removal steps are skipped entirely. Useful for running an
 agent against a plain directory or a project that does not use git.
 
+    --refresh-cache
+
+Delete the on-disk tool cache for the selected agent type (under
+`<agentbox-dir>/cache/<agent-type>/`), then start the session so the install
+step runs again. Use this to upgrade after a new agent release. Without this
+flag, if the agent CLI is already present in the cache from a previous
+session, the install command is skipped.
+
 ---
 
 ### agentbox stop
@@ -187,6 +195,11 @@ global prefix, so `npm install -g` never requires root or sudo.
 | `~/.ssh/known_hosts` (if present)| `/home/devbox/.ssh/known_hosts` | Read-only               |
 | `<agentbox-dir>/skills/`         | `/home/devbox/app/skills`   | If directory exists          |
 | `<agentbox-dir>/workflows/`      | `/home/devbox/app/workflows`| If directory exists          |
+| `<agentbox-dir>/cache/<agent>/npm-global` | `/home/devbox/.npm-global` | Agent installs (`npm -g`)   |
+| `<agentbox-dir>/cache/<agent>/local`      | `/home/devbox/.local`      | e.g. curl-based CLI binaries |
+
+The cache directories are created automatically. Each `--agent` value has its
+own cache so installs do not collide.
 
 On podman, all volumes are relabeled with `:z` for SELinux compatibility and
 `--userns=keep-id` is set alongside `--user` to maintain correct namespace
@@ -311,7 +324,8 @@ When `agentbox start` is invoked the following steps occur in order:
 9. If the container name exists but is stopped, remove it and start fresh.
 10. Inside the new container, in order:
     a. Source `pre_start.sh` (if present).
-    b. Install the agent via npm.
+    b. Install the agent (skipped if the CLI binary already exists in the
+       persisted cache, unless `--refresh-cache` cleared it).
     c. Launch the agent CLI (or `devbox shell`, or `bash` depending on flags).
 11. On exit — whether the container exits normally, the script is interrupted,
     or a failure occurs — print the worktree path so the user knows where to

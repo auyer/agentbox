@@ -72,6 +72,8 @@ function usage() {
 	printf '                            Container path starting with ./ is\n'
 	printf '                            relative to /home/devbox/app.\n'
 	printf '                            Can be specified multiple times.\n'
+	printf '  --refresh-cache           Remove cached agent install for this\n'
+	printf '                            agent type, then reinstall on start\n'
 	printf '\nGlobal options:\n'
 	printf '  -v, --verbose             Print container commands before\n'
 	printf '                            running them\n'
@@ -268,8 +270,6 @@ function build_run_args() {
 		'--network=host'
 		"--name=${container_name}"
 		'--env=HOME=/home/devbox'
-		'--env=CLAUDE_CONFIG_DIR=/home/devbox/.claude'
-		'--env=PATH=/home/devbox/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 	)
 
 	# Always run as the host user so the process is never root.
@@ -284,6 +284,14 @@ function build_run_args() {
 	fi
 
 	args+=("--volume=${worktree_path}:/home/devbox/app${selinux}")
+
+	# Persist npm global + ~/.local installs across sessions (per agent type).
+	# Mount cached .local before agent config so paths like
+	# /home/devbox/.local/share/opencode remain valid overlays.
+	local cache_base="${AGENT_DIR}/cache/${agent_type}"
+	args+=("--volume=${cache_base}/npm-global:/home/devbox/.npm-global${selinux}")
+	args+=("--volume=${cache_base}/local:/home/devbox/.local${selinux}")
+
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
 	# Mounts from default_mounts.conf
@@ -325,8 +333,9 @@ function cmd_start() {
 	local use_devbox=1
 	local yolo=0
 	local no_git=0
+	local refresh_cache=0
 	local git_root worktree_path container_name cmd
-	local install_cmd cli_cmd
+	local install_cmd cli_base cli_cmd
 	local -a run_args
 
 	while [[ $# -gt 0 ]]; do
@@ -357,6 +366,10 @@ function cmd_start() {
 			;;
 		--no-git)
 			no_git=1
+			shift
+			;;
+		--refresh-cache)
+			refresh_cache=1
 			shift
 			;;
 		--mount)
@@ -474,6 +487,13 @@ GIT_ROOT=${git_root:-}
 NO_GIT=${no_git}
 EOF
 
+	local cache_base="${AGENT_DIR}/cache/${agent_type}"
+	if [[ "${refresh_cache}" -eq 1 ]]; then
+		printf 'Refreshing agent tool cache at %s\n' "${cache_base}"
+		rm -rf "${cache_base}"
+	fi
+	mkdir -p "${cache_base}/npm-global" "${cache_base}/local/bin"
+
 	mapfile -t run_args < <(
 		build_run_args \
 			"${cmd}" "${worktree_path}" "${container_name}" \
@@ -481,7 +501,8 @@ EOF
 	)
 
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"
-	cli_cmd="${AGENT_CLI_CMDS[${agent_type}]}"
+	cli_base="${AGENT_CLI_CMDS[${agent_type}]}"
+	cli_cmd="${cli_base}"
 	if [[ "${yolo}" -eq 1 ]]; then
 		cli_cmd="${cli_cmd} --dangerously-skip-permissions"
 	fi
@@ -516,7 +537,7 @@ EOF
 		# Capture the PATH where npm installed the CLI, then enter devbox
 		# and restore that PATH so the globally-installed CLI is found
 		local cli_path
-		cli_path="$(dirname "$(command -v "${cli_cmd}" 2>/dev/null || printf '')")"
+		cli_path="$(dirname "$(command -v "${cli_base}" 2>/dev/null || printf '')")"
 		if [[ -n "${cli_path}" ]]; then
 			launch_cmd="eval \"\$(devbox shell --print-env)\"; export PATH=\"${cli_path}:\${PATH}\"; exec ${cli_cmd}"
 		else
@@ -541,9 +562,13 @@ EOF
 		custom_cfg_cmd="source <(echo '${encoded}' | base64 --decode); "
 	fi
 
+	# Skip install if the CLI is already present in the persisted cache.
+	local install_if_missing
+	install_if_missing="command -v ${cli_base} >/dev/null 2>&1 || { ${install_cmd}; }"
+
 	printf 'Starting agent container...\n'
 	run_cmd "${cmd}" run "${run_args[@]}" agentbox-image /bin/bash -c \
-		"${custom_cfg_cmd}${install_cmd}; ${launch_cmd}"
+		"${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}"
 }
 
 function cmd_stop() {

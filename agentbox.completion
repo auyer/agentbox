@@ -23,6 +23,7 @@ _agentbox_complete() {
     --dangerously-skip-permissions
     --no-git
     --mount
+    --refresh-cache
     --help
     -h
   )
@@ -101,6 +102,7 @@ if type compdef >/dev/null 2>&1; then
               '--no-devbox[Skip devbox shell]' \
               '--dangerously-skip-permissions[Run agent in yolo mode]' \
               '--no-git[Run without git, mount current directory]' \
+              '--refresh-cache[Remove cached agent install and reinstall]' \
               '*--mount[Mount host path into container]:mount spec:_files' \
               ':branch name:' \
               && return
