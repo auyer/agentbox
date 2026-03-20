@@ -78,24 +78,25 @@ container name.
 
 **Options**
 
-    -s, --use-stash
-
-Stash any uncommitted changes in the current working tree before creating the
-worktree, then pop the stash inside the new worktree. Useful for carrying
-work-in-progress into the agent session.
-
-    --agent <type>
+    -a, --agent <type>
 
 The agent to install and launch. Defaults to `claude-code`.
 
 | Value         | Installed package                          | CLI binary  | Config dir        |
 |---------------|--------------------------------------------|-------------|-------------------|
-| claude-code   | @anthropic-ai/claude-code@latest           | claude      | ~/.claude         |
+| claude-code   | claude.ai/install.sh                       | claude      | ~/.claude         |
 | qwen-code     | @qwen-code/qwen-code@latest                | qwen        | ~/.qwen           |
 | opencode-ai   | opencode-ai                                | opencode    | ~/.opencode       |
+| cursor        | cursor.com/install                         | cursor      | ~/.cursor         |
 
 The agent config directory is mounted read-write into the container so that
 credentials and settings persist across sessions.
+
+    -s, --use-stash
+
+Stash any uncommitted changes in the current working tree before creating the
+worktree, then pop the stash inside the new worktree. Useful for carrying
+work-in-progress into the agent session.
 
     --no-autostart
 
@@ -262,7 +263,7 @@ Completion includes:
 
 - Subcommands: `start`, `stop`, `resume`, `help`
 - Options: `-v`, `--verbose`, `-s`, `--use-stash`, `--agent`, etc.
-- Agent types: `claude-code`, `qwen-code`, `opencode-ai`
+- Agent types: `claude-code`, `qwen-code`, `opencode-ai`, `cursor`
 
 ### Manual Setup
 

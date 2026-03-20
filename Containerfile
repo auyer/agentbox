@@ -25,10 +25,11 @@ ENV HOME=/home/devbox
 # Point npm global prefix to a user-writable dir so that
 # `npm install -g` never requires root or sudo.
 RUN npm config set prefix /home/devbox/.npm-global
-ENV PATH="/home/devbox/.npm-global/bin:${PATH}"
+ENV PATH="/home/devbox/.local/bin:/home/devbox/.npm-global/bin:${PATH}"
 
 RUN mkdir -p /home/devbox/.cache \
 	/home/devbox/.config \
-	/home/devbox/.ssh
+	/home/devbox/.ssh \
+	/home/devbox/.local/bin
 
 WORKDIR /home/devbox/app/

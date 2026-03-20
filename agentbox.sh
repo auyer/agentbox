@@ -12,13 +12,15 @@ declare -A AGENT_CONFIG_DIRS=(
 	['claude-code']="${HOME}/.claude:/home/devbox/.claude"
 	['qwen-code']="${HOME}/.qwen:/home/devbox/.qwen"
 	['opencode-ai']="${HOME}/.opencode:/home/devbox/.local/share/opencode"
+	['cursor']="${HOME}/.cursor:/home/devbox/.cursor"
 )
 
 # Agent type → npm install command
 declare -A AGENT_INSTALL_CMDS=(
-	['claude-code']='npm install -g @anthropic-ai/claude-code@latest'
+	['claude-code']='curl -fsSL https://claude.ai/install.sh | bash'
 	['qwen-code']='npm install -g @qwen-code/qwen-code@latest'
 	['opencode-ai']='npm i -g opencode-ai'
+	['cursor']='curl https://cursor.com/install -fsS | bash'
 )
 
 # Agent type → CLI binary to launch after install
@@ -26,6 +28,7 @@ declare -A AGENT_CLI_CMDS=(
 	['claude-code']='claude'
 	['qwen-code']='qwen'
 	['opencode-ai']='opencode'
+	['cursor']='cursor-agent'
 )
 
 function get_state_file() {
@@ -50,11 +53,11 @@ function usage() {
 	printf 'Start options:\n'
 	printf '  BRANCH                    Branch name'
 	printf ' (default: agentbox-<date>)\n'
+	printf '  -a, --agent <type>        Agent type (default: claude-code)\n'
+	printf '                            Options: claude-code, qwen-code,\n'
+	printf '                            opencode-ai, cursor\n'
 	printf '  -s, --use-stash           Stash current changes and apply\n'
 	printf '                            to the new worktree\n'
-	printf '  --agent <type>            Agent type (default: claude-code)\n'
-	printf '                            Options: claude-code, qwen-code,\n'
-	printf '                            opencode-ai\n'
 	printf '  --no-autostart            Do not launch the agent CLI\n'
 	printf '                            automatically (drops into bash)\n'
 	printf '  --no-devbox               Skip devbox shell even if\n'
@@ -266,6 +269,7 @@ function build_run_args() {
 		"--name=${container_name}"
 		'--env=HOME=/home/devbox'
 		'--env=CLAUDE_CONFIG_DIR=/home/devbox/.claude'
+		'--env=PATH=/home/devbox/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 	)
 
 	# Always run as the host user so the process is never root.
@@ -331,7 +335,7 @@ function cmd_start() {
 			use_stash=1
 			shift
 			;;
-		--agent)
+		-a | --agent)
 			agent_type="${2}"
 			shift 2
 			;;
@@ -383,7 +387,7 @@ function cmd_start() {
 
 	if [[ -z "${AGENT_INSTALL_CMDS[${agent_type}]+set}" ]]; then
 		printf 'ERROR: unknown agent type: %s\n' "${agent_type}" >&2
-		printf 'Valid types: claude-code, qwen-code, opencode-ai\n' >&2
+		printf 'Valid types: claude-code, qwen-code, opencode-ai, cursor\n' >&2
 		exit 22 # EINVAL
 	fi
 

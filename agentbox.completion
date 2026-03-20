@@ -16,6 +16,7 @@ _agentbox_complete() {
     --verbose
     -s
     --use-stash
+    -a
     --agent
     --no-autostart
     --no-devbox
@@ -25,7 +26,7 @@ _agentbox_complete() {
     --help
     -h
   )
-  agent_types=(claude-code qwen-code opencode-ai)
+  agent_types=(claude-code qwen-code opencode-ai cursor)
 
   # Determine current command context
   if [[ ${cword} -eq 1 ]]; then
@@ -39,7 +40,7 @@ _agentbox_complete() {
 
   case "${subcommand}" in
     start)
-      if [[ "${prev}" == "--agent" ]]; then
+      if [[ "${prev}" == "--agent" || "${prev}" == "-a" ]]; then
         # Completing agent type
         COMPREPLY=($(compgen -W "${agent_types[*]}" -- "${cur}"))
       elif [[ "${prev}" == "--mount" ]]; then
@@ -78,7 +79,7 @@ if type compdef >/dev/null 2>&1; then
     local -a cmds agent_types
 
     cmds=('start:Start a new agent session' 'stop:Stop the current session' 'resume:Resume a running session' 'help:Show help')
-    agent_types=(claude-code qwen-code opencode-ai)
+    agent_types=(claude-code qwen-code opencode-ai cursor)
 
     _arguments -C \
       '(-v --verbose)'{-v,--verbose}'[Verbose output]' \
@@ -95,7 +96,7 @@ if type compdef >/dev/null 2>&1; then
           start)
             _arguments \
               '(-s --use-stash)'{-s,--use-stash}'[Stash current changes and apply to new worktree]' \
-              '--agent[Agent type]:agent type:('"${agent_types[*]}"')' \
+              '(-a --agent)'{-a,--agent}'[Agent type]:agent type:('"${agent_types[*]}"')' \
               '--no-autostart[Do not launch the agent CLI automatically]' \
               '--no-devbox[Skip devbox shell]' \
               '--dangerously-skip-permissions[Run agent in yolo mode]' \
