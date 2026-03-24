@@ -4,15 +4,16 @@ set -euo pipefail
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${AGENT_DIR}/.agentbox-state"
 VERBOSE=0
+FORCE_DOCKER=0
 declare -a EXTRA_MOUNTS=()
 
 # Agent type → host:container config dir pairs
 # Host folder stays the same for all tools; container folder differs for opencode-ai
 declare -A AGENT_CONFIG_DIRS=(
-	['claude-code']="${HOME}/.claude:/home/devbox/.claude"
-	['qwen-code']="${HOME}/.qwen:/home/devbox/.qwen"
-	['opencode-ai']="${HOME}/.opencode:/home/devbox/.local/share/opencode"
-	['cursor']="${HOME}/.cursor:/home/devbox/.cursor"
+	['claude-code']="${HOME}/.claude:/home/agentbox/.claude"
+	['qwen-code']="${HOME}/.qwen:/home/agentbox/.qwen"
+	['opencode-ai']="${HOME}/.opencode:/home/agentbox/.local/share/opencode"
+	['cursor']="${HOME}/.cursor:/home/agentbox/.cursor"
 )
 
 # Agent type → npm install command
@@ -23,10 +24,11 @@ declare -A AGENT_INSTALL_CMDS=(
 	['cursor']='curl https://cursor.com/install -fsS | bash'
 )
 
-# Agent type → extra environment variables to set inside the container
-# Space-separated KEY=VALUE pairs; values use container-side paths
-declare -A AGENT_EXTRA_ENVS=(
-	['claude-code']='CLAUDE_CONFIG_DIR=/home/devbox/.claude'
+# Agent type → env var name that tells the agent where its config dir is.
+# The value is the container-side path from AGENT_CONFIG_DIRS at runtime,
+# so the path is never duplicated.  Empty means no config-dir env var.
+declare -A AGENT_CONFIG_ENV_VAR=(
+	['claude-code']='CLAUDE_CONFIG_DIR'
 	['qwen-code']=''
 	['opencode-ai']=''
 	['cursor']=''
@@ -69,8 +71,6 @@ function usage() {
 	printf '                            to the new worktree\n'
 	printf '  --no-autostart            Do not launch the agent CLI\n'
 	printf '                            automatically (drops into bash)\n'
-	printf '  --no-devbox               Skip devbox shell even if\n'
-	printf '                            devbox.json is present\n'
 	printf '  --dangerously-skip-permissions\n'
 	printf '                            Run agent in yolo mode\n'
 	printf '                            (off by default)\n'
@@ -79,16 +79,20 @@ function usage() {
 	printf '                            skips worktree and branch creation\n'
 	printf '  --mount <host:container>  Mount a host path into the container.\n'
 	printf '                            Container path starting with ./ is\n'
-	printf '                            relative to /home/devbox/app.\n'
+	printf '                            relative to the container workdir.\n'
 	printf '                            Can be specified multiple times.\n'
 	printf '  --refresh-cache           Remove cached agent install for this\n'
 	printf '                            agent type, then reinstall on start\n'
 	printf '  --privileged              Run the container in privileged mode\n'
 	printf '                            (enables Docker-in-Docker and full\n'
 	printf '                            device access; off by default)\n'
+	printf '  --image <image-ref>       Use a custom container image instead\n'
+	printf '                            of building from Containerfile.\n'
+	printf '                            Requires a glibc-based image with\n'
 	printf '\nGlobal options:\n'
 	printf '  -v, --verbose             Print container commands before\n'
 	printf '                            running them\n'
+	printf '  --docker                  Use docker even if podman is available\n'
 }
 
 function print_worktree_hint() {
@@ -124,7 +128,7 @@ function run_cmd() {
 }
 
 function detect_container_cmd() {
-	if command -v podman >/dev/null 2>&1; then
+	if [[ "${FORCE_DOCKER}" -eq 0 ]] && command -v podman >/dev/null 2>&1; then
 		printf 'podman'
 		return 0
 	fi
@@ -179,23 +183,31 @@ function check_no_active_session() {
 	fi
 }
 
-# Expand ~ and ${HOME} / ${AGENT_DIR} in a path string.
+# Expand ~ and ${HOME} / ${AGENT_DIR} / ${CONTAINER_HOME} /
+# ${CONTAINER_WORKDIR} in a path string.
+# Usage: normalize_mount_path <path> [container_home] [container_workdir]
 function normalize_mount_path() {
 	local path="${1}"
+	local c_home="${2:-/home/agentbox}"
+	local c_workdir="${3:-/home/agentbox/app}"
 	if [[ "${path}" == '~'* ]]; then
 		path="${HOME}${path:1}"
 	fi
 	path="${path//\$\{HOME\}/${HOME}}"
 	path="${path//\$\{AGENT_DIR\}/${AGENT_DIR}}"
+	path="${path//\$\{CONTAINER_HOME\}/${c_home}}"
+	path="${path//\$\{CONTAINER_WORKDIR\}/${c_workdir}}"
 	printf '%s' "${path}"
 }
 
 # Parse a mount spec of the form host:container[:options] and print a
 # --volume= argument. Silently skips the entry if the host path does not exist.
-# Usage: parse_mount_spec <spec> <selinux_suffix>
+# Usage: parse_mount_spec <spec> <selinux_suffix> [container_home] [container_workdir]
 function parse_mount_spec() {
 	local raw_spec="${1}"
 	local selinux="${2}"
+	local c_home="${3:-/home/agentbox}"
+	local c_workdir="${4:-/home/agentbox/app}"
 
 	# Must contain at least one colon
 	if [[ "${raw_spec}" != *:* ]]; then
@@ -219,12 +231,14 @@ function parse_mount_spec() {
 		return 0
 	fi
 
-	host="$(normalize_mount_path "${host}")"
+	host="$(normalize_mount_path "${host}" "${c_home}" "${c_workdir}")"
 
 	# Rewrite relative container path to workdir-relative absolute path
 	if [[ "${container}" == './'* ]]; then
-		container="/home/devbox/app/${container:2}"
+		container="${c_workdir}/${container:2}"
 	fi
+	# Expand variables in the container-side path (e.g. ${CONTAINER_HOME})
+	container="$(normalize_mount_path "${container}" "${c_home}" "${c_workdir}")"
 
 	# Skip if the host path does not exist
 	if [[ ! -e "${host}" ]]; then
@@ -248,9 +262,11 @@ function parse_mount_spec() {
 }
 
 # Read default_mounts.conf and emit --volume= args for each valid entry.
-# Usage: read_mounts_file <selinux_suffix>
+# Usage: read_mounts_file <selinux_suffix> [container_home] [container_workdir]
 function read_mounts_file() {
 	local selinux="${1}"
+	local c_home="${2:-/home/agentbox}"
+	local c_workdir="${3:-/home/agentbox/app}"
 	local mounts_file="${AGENT_DIR}/default_mounts.conf"
 	[[ -f "${mounts_file}" ]] || return 0
 	local line
@@ -260,7 +276,7 @@ function read_mounts_file() {
 		line="${line#"${line%%[![:space:]]*}"}"
 		line="${line%"${line##*[![:space:]]}"}"
 		[[ -z "${line}" ]] && continue
-		parse_mount_spec "${line}" "${selinux}"
+		parse_mount_spec "${line}" "${selinux}" "${c_home}" "${c_workdir}"
 	done <"${mounts_file}"
 }
 
@@ -269,9 +285,11 @@ function build_run_args() {
 	local worktree_path="${2}"
 	local container_name="${3}"
 	local agent_type="${4}"
-	local use_devbox="${5:-1}"
-	local git_root="${6:-}"
-	local privileged="${7:-0}"
+	local git_root="${5:-}"
+	local privileged="${6:-0}"
+	local custom_image="${7:-}"
+	local container_home="${8:-/home/agentbox}"
+	local container_workdir="${9:-/home/agentbox/app}"
 	local config_pair container_config_dir config_dir
 	local -a args
 
@@ -283,17 +301,16 @@ function build_run_args() {
 		'--interactive'
 		'--tty'
 		'--network=host'
+		"--workdir=${container_workdir}"
 		"--name=${container_name}"
-		'--env=HOME=/home/devbox'
+		"--env=HOME=${container_home}"
 	)
 
-	# Agent-specific environment variables
-	local extra_envs="${AGENT_EXTRA_ENVS[${agent_type}]:-}"
-	if [[ -n "${extra_envs}" ]]; then
-		local env_pair
-		for env_pair in ${extra_envs}; do
-			args+=("--env=${env_pair}")
-		done
+	# If this agent type uses an env var to locate its config dir, set it
+	# to the container-side path extracted from AGENT_CONFIG_DIRS above.
+	local config_env_var="${AGENT_CONFIG_ENV_VAR[${agent_type}]:-}"
+	if [[ -n "${config_env_var}" ]]; then
+		args+=("--env=${config_env_var}=${container_config_dir}")
 	fi
 
 	# Always run as the host user so the process is never root.
@@ -310,20 +327,13 @@ function build_run_args() {
 		args+=('--privileged')
 	fi
 
-	args+=("--volume=${worktree_path}:/home/devbox/app${selinux}")
+	args+=("--volume=${worktree_path}:${container_workdir}${selinux}")
 
-	# Mount .devbox from git root if it exists and --no-devbox is not set.
-	if [[ "${use_devbox}" -eq 1 ]] && [[ -n "${git_root}" ]] && \
-		[[ -d "${git_root}/.devbox" ]]; then
-		args+=("--volume=${git_root}/.devbox:/home/devbox/app/.devbox${selinux}")
-	fi
 
 	# Persist npm global + ~/.local installs across sessions (per agent type).
-	# Mount cached .local before agent config so paths like
-	# /home/devbox/.local/share/opencode remain valid overlays.
 	local cache_base="${AGENT_DIR}/cache/${agent_type}"
-	args+=("--volume=${cache_base}/npm-global:/home/devbox/.npm-global${selinux}")
-	args+=("--volume=${cache_base}/local:/home/devbox/.local${selinux}")
+	args+=("--volume=${cache_base}/npm-global:/home/agentbox/.npm-global${selinux}")
+	args+=("--volume=${cache_base}/local:/home/agentbox/.local${selinux}")
 
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
@@ -331,12 +341,13 @@ function build_run_args() {
 	local mount_spec
 	while IFS= read -r mount_spec; do
 		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
-	done < <(read_mounts_file "${selinux}")
+	done < <(read_mounts_file "${selinux}" "${container_home}" "${container_workdir}")
 
 	# Mounts from --mount CLI flags
 	local extra_spec
 	for extra_spec in "${EXTRA_MOUNTS[@]+"${EXTRA_MOUNTS[@]}"}"; do
-		mount_spec="$(parse_mount_spec "${extra_spec}" "${selinux}")"
+		mount_spec="$(parse_mount_spec "${extra_spec}" "${selinux}" \
+			"${container_home}" "${container_workdir}")"
 		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
 	done
 
@@ -364,16 +375,115 @@ function build_run_args() {
 	printf '%s\n' "${args[@]}"
 }
 
+# Return 0 if the given image has node in PATH, non-zero otherwise.
+# Usage: image_has_node <cmd> <image_ref>
+function image_has_node() {
+	local cmd="${1}"
+	local image_ref="${2}"
+	run_cmd "${cmd}" run --rm "${image_ref}" \
+		node --version >/dev/null 2>&1
+}
+
+# Detect the home directory and working directory configured in a container
+# image. Prints two lines: first container_home, then container_workdir.
+# Falls back to /root and <home>/app respectively if detection fails.
+# Usage: detect_image_paths <cmd> <image_ref>
+function detect_image_paths() {
+	local cmd="${1}"
+	local image_ref="${2}"
+	local home_dir workdir
+
+	# Primary: run the image so its own environment expands $HOME.
+	home_dir="$(
+		run_cmd "${cmd}" run --rm "${image_ref}" \
+			sh -c 'printf "%s" "${HOME}"' 2>/dev/null || printf ''
+	)"
+
+	# Fallback 1: parse ENV entries from image metadata.
+	if [[ -z "${home_dir}" ]]; then
+		home_dir="$(
+			run_cmd "${cmd}" inspect "${image_ref}" \
+				--format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
+				| grep '^HOME=' | head -1 | cut -d= -f2-
+		)"
+	fi
+
+	# Fallback 2: /root is correct for images running as root.
+	home_dir="${home_dir:-/root}"
+
+	# Working directory: metadata-only, no container startup needed.
+	workdir="$(
+		run_cmd "${cmd}" inspect "${image_ref}" \
+			--format '{{.Config.WorkingDir}}' 2>/dev/null || printf ''
+	)"
+
+	# Treat empty or bare-root WORKDIR as "not configured".
+	if [[ -z "${workdir}" ]] || [[ "${workdir}" == '/' ]]; then
+		workdir="${home_dir}/app"
+	fi
+
+	printf '%s\n%s\n' "${home_dir}" "${workdir}"
+}
+
+# Run a one-shot installer container (agentbox-image) to populate the tool
+# cache.  Skipped when the expected CLI binary is already present on disk.
+# Usage: ensure_tool_cache <cmd> <agent_type> <cache_base>
+function ensure_tool_cache() {
+	local cmd="${1}"
+	local agent_type="${2}"
+	local cache_base="${3}"
+
+	local cli_base="${AGENT_CLI_CMDS[${agent_type}]}"
+	local install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"
+
+	# npm-installed agents land in npm-global/bin; others in local/bin
+	local cli_path
+	if [[ "${install_cmd}" == npm* ]]; then
+		cli_path="${cache_base}/npm-global/bin/${cli_base}"
+	else
+		cli_path="${cache_base}/local/bin/${cli_base}"
+	fi
+
+	if [[ -f "${cli_path}" ]]; then
+		printf 'Tool cache is warm for %s, skipping installer\n' "${agent_type}"
+		return 0
+	fi
+
+	printf 'Cache is cold — running installer container for %s\n' "${agent_type}"
+
+	local selinux=''
+	[[ "${cmd}" == 'podman' ]] && selinux=':z'
+
+	local -a installer_args=(
+		'--rm'
+		'--network=host'
+		'--env=HOME=/home/agentbox'
+		'--env=NPM_CONFIG_PREFIX=/home/agentbox/.npm-global'
+		'--env=PATH=/home/agentbox/.local/bin:/home/agentbox/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+		"--volume=${cache_base}/npm-global:/home/agentbox/.npm-global${selinux}"
+		"--volume=${cache_base}/local:/home/agentbox/.local${selinux}"
+		"--user=$(id --user):$(id --group)"
+	)
+	if [[ "${cmd}" == 'podman' ]]; then
+		installer_args+=('--userns=keep-id')
+	fi
+
+	local install_if_missing="command -v ${cli_base} >/dev/null 2>&1 || { ${install_cmd}; }"
+
+	run_cmd "${cmd}" run "${installer_args[@]}" agentbox-image \
+		/bin/bash -c "${install_if_missing}"
+}
+
 function cmd_start() {
 	local branch_name=''
 	local use_stash=0
 	local agent_type
 	local autostart=1
-	local use_devbox=1
 	local yolo=0
 	local no_git=0
 	local refresh_cache=0
 	local privileged=0
+	local custom_image=''
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_base cli_cmd
 	local -a run_args
@@ -404,10 +514,6 @@ function cmd_start() {
 			autostart=0
 			shift
 			;;
-		--no-devbox)
-			use_devbox=0
-			shift
-			;;
 		--dangerously-skip-permissions)
 			yolo=1
 			shift
@@ -422,6 +528,14 @@ function cmd_start() {
 			;;
 		--privileged)
 			privileged=1
+			shift
+			;;
+		--image)
+			custom_image="${2}"
+			shift 2
+			;;
+		--image=*)
+			custom_image="${1#--image=}"
 			shift
 			;;
 		--mount)
@@ -528,6 +642,61 @@ function cmd_start() {
 		--file "${AGENT_DIR}/Containerfile" \
 		"${AGENT_DIR}"
 
+	local container_home='/home/agentbox'
+	local container_workdir='/home/agentbox/app'
+
+	if [[ -n "${custom_image}" ]]; then
+		# Step 1: build user-provided Containerfile into a named image.
+		local user_image_ref="${custom_image}"
+		if [[ -f "${custom_image}" ]]; then
+			printf 'Building custom image from %s...\n' "${custom_image}"
+			run_cmd "${cmd}" build \
+				--tag agentbox-user-image \
+				--file "${custom_image}" \
+				"$(dirname "$(realpath "${custom_image}")")"
+			user_image_ref='agentbox-user-image'
+		fi
+
+		# Step 2: build a thin wrapper image that layers the agentbox
+		# environment (/home/agentbox, npm prefix, PATH) on top of the
+		# user's image.  If the user's image lacks node we also COPY the
+		# node runtime from agentbox-image so the agent CLI works.
+		local tmp_ctx
+		tmp_ctx="$(mktemp -d)"
+		local wrapper="${tmp_ctx}/Containerfile"
+		printf 'FROM %s\n' "${user_image_ref}" >"${wrapper}"
+		if ! image_has_node "${cmd}" "${user_image_ref}"; then
+			printf 'User image lacks node — copying from agentbox-image\n'
+			cat >>"${wrapper}" <<'DOCKERFILE'
+COPY --from=agentbox-image /usr/local/bin/node /usr/local/bin/
+COPY --from=agentbox-image /usr/local/bin/npm  /usr/local/bin/
+COPY --from=agentbox-image /usr/local/bin/npx  /usr/local/bin/
+COPY --from=agentbox-image /usr/local/lib/node_modules /usr/local/lib/node_modules/
+DOCKERFILE
+		fi
+		cat >>"${wrapper}" <<'DOCKERFILE'
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+RUN mkdir -p /home/agentbox/.npm-global /home/agentbox/.local/bin \
+             /home/agentbox/.cache /home/agentbox/.ssh \
+             /home/agentbox/app \
+    && chown -R ${USER_ID}:${GROUP_ID} /home/agentbox
+ENV HOME=/home/agentbox
+ENV NPM_CONFIG_PREFIX=/home/agentbox/.npm-global
+ENV PATH="/home/agentbox/.local/bin:/home/agentbox/.npm-global/bin:${PATH}"
+WORKDIR /home/agentbox/app
+DOCKERFILE
+		printf 'Building runtime image (agentbox environment on top of user image)...\n'
+		run_cmd "${cmd}" build \
+			--tag agentbox-user-image \
+			--build-arg "USER_ID=$(id --user)" \
+			--build-arg "GROUP_ID=$(id --group)" \
+			--file "${wrapper}" \
+			"${tmp_ctx}"
+		rm -rf "${tmp_ctx}"
+		custom_image='agentbox-user-image'
+	fi
+
 	# Write state file before launching container
 	local state_file="${STATE_DIR}/${project_name}.state"
 	cat >"${state_file}" <<EOF
@@ -537,6 +706,7 @@ BRANCH_NAME=${branch_name}
 AGENT_TYPE=${agent_type}
 GIT_ROOT=${git_root:-}
 NO_GIT=${no_git}
+CUSTOM_IMAGE=${custom_image}
 EOF
 
 	local cache_base="${AGENT_DIR}/cache/${agent_type}"
@@ -546,11 +716,18 @@ EOF
 	fi
 	mkdir -p "${cache_base}/npm-global" "${cache_base}/local/bin"
 
+	# For custom images, pre-populate the tool cache via agentbox-image so
+	# the combined runtime image starts with the agent CLI already installed.
+	if [[ -n "${custom_image}" ]]; then
+		ensure_tool_cache "${cmd}" "${agent_type}" "${cache_base}"
+	fi
+
 	mapfile -t run_args < <(
 		build_run_args \
 			"${cmd}" "${worktree_path}" "${container_name}" \
-			"${agent_type}" "${use_devbox}" "${git_root:-}" \
-			"${privileged}"
+			"${agent_type}" "${git_root:-}" \
+			"${privileged}" "${custom_image}" \
+			"${container_home}" "${container_workdir}"
 	)
 
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"
@@ -568,37 +745,19 @@ EOF
 			printf 'absent'
 	)"
 
+	printf 'Container state: %s\n' "${existing_state}"
 	if [[ "${existing_state}" == 'true' ]]; then
 		printf 'Container already running — resuming...\n'
 		run_cmd "${cmd}" exec --interactive --tty "${container_name}" /bin/bash
 		return 0
 	elif [[ "${existing_state}" != 'absent' ]]; then
 		printf 'Removing stopped container %s...\n' "${container_name}"
-		run_cmd "${cmd}" rm "${container_name}"
-	fi
-
-	# Auto-detect devbox: check for devbox.json in the worktree
-	local has_devbox=0
-	if [[ "${use_devbox}" -eq 1 ]] &&
-		[[ -f "${worktree_path}/devbox.json" ]]; then
-		has_devbox=1
-		printf 'devbox.json detected — will run inside devbox shell\n'
+		run_cmd "${cmd}" rm "${container_name}" 2>/dev/null || \
+			printf 'WARNING: could not remove container (already gone?), continuing\n'
 	fi
 
 	local launch_cmd
-	if [[ "${has_devbox}" -eq 1 ]] && [[ "${autostart}" -eq 1 ]]; then
-		# Capture the PATH where npm installed the CLI, then enter devbox
-		# and restore that PATH so the globally-installed CLI is found
-		local cli_path
-		cli_path="$(dirname "$(command -v "${cli_base}" 2>/dev/null || printf '')")"
-		if [[ -n "${cli_path}" ]]; then
-			launch_cmd="eval \"\$(devbox shell --print-env)\"; export PATH=\"${cli_path}:\${PATH}\"; exec ${cli_cmd}"
-		else
-			launch_cmd="eval \"\$(devbox shell --print-env)\"; exec ${cli_cmd}"
-		fi
-	elif [[ "${has_devbox}" -eq 1 ]]; then
-		launch_cmd='devbox shell'
-	elif [[ "${autostart}" -eq 1 ]]; then
+	if [[ "${autostart}" -eq 1 ]]; then
 		launch_cmd="exec ${cli_cmd}"
 	else
 		launch_cmd='exec bash'
@@ -608,20 +767,40 @@ EOF
 	# decode+run it inside the container as the very first step.
 	# The base64 encoding handles multi-line content,
 	# special characters, and quotes without any escaping issues.
+	# `|| true` makes the whole source fallible: if a tool used inside
+	# (e.g. git) is not available in the container image the session
+	# still starts instead of aborting.  `set +e` resets any `set -e`
+	# that the script may have activated in the current shell.
 	local custom_cfg_cmd=''
 	if [[ -f "${AGENT_DIR}/pre_start.sh" ]]; then
 		local encoded
 		encoded="$(base64 --wrap=0 "${AGENT_DIR}/pre_start.sh")"
-		custom_cfg_cmd="source <(echo '${encoded}' | base64 --decode); "
+		custom_cfg_cmd="source <(echo '${encoded}' | base64 --decode) || true; set +e; "
 	fi
 
 	# Skip install if the CLI is already present in the persisted cache.
 	local install_if_missing
 	install_if_missing="command -v ${cli_base} >/dev/null 2>&1 || { ${install_cmd}; }"
 
+	local runtime_image
+	if [[ -n "${custom_image}" ]]; then
+		runtime_image="${custom_image}"
+	else
+		runtime_image='agentbox-image'
+	fi
+	printf 'Runtime image:  %s\n' "${runtime_image}"
+	printf 'Launch command: %s\n' "${launch_cmd}"
 	printf 'Starting agent container...\n'
-	run_cmd "${cmd}" run "${run_args[@]}" agentbox-image /bin/bash -c \
-		"${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}"
+	if [[ -n "${custom_image}" ]]; then
+		# Cache already populated by ensure_tool_cache; skip install step.
+		# mkdir -p /home/agentbox ensures the mount-point base exists in the
+		# user's image before volumes are overlaid.
+		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" /bin/bash -c \
+			"mkdir -p /home/agentbox ${container_workdir}; ${custom_cfg_cmd}${launch_cmd}"
+	else
+		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" /bin/bash -c \
+			"${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}"
+	fi
 }
 
 function cmd_stop() {
@@ -670,6 +849,9 @@ for _arg in "$@"; do
 	case "${_arg}" in
 	-v | --verbose)
 		VERBOSE=1
+		;;
+	--docker)
+		FORCE_DOCKER=1
 		;;
 	*)
 		_filtered+=("${_arg}")

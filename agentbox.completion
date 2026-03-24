@@ -14,15 +14,16 @@ _agentbox_complete() {
   opts=(
     -v
     --verbose
+    --docker
     -s
     --use-stash
     -a
     --agent
     --no-autostart
-    --no-devbox
     --dangerously-skip-permissions
     --no-git
     --mount
+    --image
     --privileged
     --refresh-cache
     --help
@@ -45,6 +46,10 @@ _agentbox_complete() {
       if [[ "${prev}" == "--agent" || "${prev}" == "-a" ]]; then
         # Completing agent type
         COMPREPLY=($(compgen -W "${agent_types[*]}" -- "${cur}"))
+      elif [[ "${prev}" == "--image" ]]; then
+        # Offer file paths (Containerfile/Dockerfile) as completions
+        COMPREPLY=($(compgen -f -- "${cur}"))
+        compopt -o filenames 2>/dev/null
       elif [[ "${prev}" == "--mount" ]]; then
         # Completing mount spec — offer file/directory path completion
         COMPREPLY=($(compgen -f -- "${cur}"))
@@ -85,6 +90,7 @@ if type compdef >/dev/null 2>&1; then
 
     _arguments -C \
       '(-v --verbose)'{-v,--verbose}'[Verbose output]' \
+      '--docker[Use docker even if podman is available]' \
       '1: :->command' \
       '*: :->args' \
       && return
@@ -100,11 +106,11 @@ if type compdef >/dev/null 2>&1; then
               '(-s --use-stash)'{-s,--use-stash}'[Stash current changes and apply to new worktree]' \
               '(-a --agent)'{-a,--agent}'[Agent type]:agent type:('"${agent_types[*]}"')' \
               '--no-autostart[Do not launch the agent CLI automatically]' \
-              '--no-devbox[Skip devbox shell]' \
               '--dangerously-skip-permissions[Run agent in yolo mode]' \
               '--no-git[Run without git, mount current directory]' \
               '--refresh-cache[Remove cached agent install and reinstall]' \
               '--privileged[Run container in privileged mode (enables Docker-in-Docker)]' \
+              '--image[Use custom container image or Containerfile (glibc+bash required)]:image or file:_files' \
               '*--mount[Mount host path into container]:mount spec:_files' \
               ':branch name:' \
               && return

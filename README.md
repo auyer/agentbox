@@ -3,7 +3,6 @@
 Run LLM coding agents in an isolated container, locked to a dedicated git
 worktree. Each session gets its own branch, its own container, and no access
 to the rest of your repository's git history.
-Install packages with [Devbox](https://www.jetify.com/devbox), for maximum flexibility without custom images.
 
 ## Overview
 
@@ -104,12 +103,6 @@ Do not launch the agent CLI after the container starts. Drops into a bash
 shell instead. Useful for inspecting the environment or running commands
 manually.
 
-    --no-devbox
-
-Skip devbox integration even if a `devbox.json` is present in the worktree.
-By default, if `devbox.json` is detected, the agent is launched inside
-`devbox shell` so that the project's declared toolchain is available.
-
     --dangerously-skip-permissions
 
 Pass `--dangerously-skip-permissions` to the agent CLI at launch. This
@@ -136,6 +129,24 @@ Run the container with the `--privileged` flag. This grants the container full
 access to host devices and disables the default seccomp/AppArmor profiles,
 which is required for Docker-in-Docker (dind) workflows. Off by default — only
 use this when the agent session specifically needs to run a container daemon.
+
+    --image <image-ref|path>
+
+Use a user-provided container image as the base runtime environment instead of
+the agentbox built-in image. See [**Custom images**](#custom-images) below.
+
+    --mount <host:container[:options]>
+
+Mount an additional host path into the container. The container path may start
+with `./` to be interpreted as relative to the project workdir. Can be
+specified multiple times.
+
+Variables `${CONTAINER_HOME}`, `${CONTAINER_WORKDIR}`, `${HOME}`, and
+`${AGENT_DIR}` are expanded in both paths.
+
+    --docker
+
+Force the use of `docker` even when `podman` is available.
 
 ---
 
@@ -182,34 +193,32 @@ anywhere in the argument list.
 ## Container environment
 
 The container is built from the `Containerfile` in the agentbox directory.
-The base image is `docker.io/jetpackio/devbox:latest`.
+The base image is `docker.io/node:trixie-slim`.
 
-At build time the `devbox` user inside the container is remapped to match the
-calling user's UID and GID via `--build-arg USER_ID` and `--build-arg
-GROUP_ID`. This ensures all files written inside the container are owned by
-the correct host user without any chowning.
+At build time the host user's UID and GID are passed as `USER_ID` and
+`GROUP_ID` build args. The home directory `/home/agentbox` and all its
+subdirectories are created and chowned to these IDs at build time, so all
+files written inside the container are owned by the correct host user without
+any runtime chowning.
 
 npm is configured during the image build to use `$HOME/.npm-global` as the
-global prefix, so `npm install -g` never requires root or sudo.
+global prefix, so `npm install -g` never requires root.
+
+The project worktree is always mounted at `/home/agentbox/app`, which is also
+set as the container's working directory.
 
 ### Volume mounts
 
-| Host path                        | Container path              | Notes                        |
-|----------------------------------|-----------------------------|------------------------------|
-| `<worktree>`                     | `/home/devbox/app`          | Project files, read-write    |
-| `~/<agent-config-dir>`           | `/home/devbox/<config-dir>` | Agent credentials and config |
-| `~/.ssh/` (if present)          | `/home/devbox/.ssh/`        | Read-only                    |
-| `~/.ssh/known_hosts` (if present)| `/home/devbox/.ssh/known_hosts` | Read-only               |
-| `<git-root>/.devbox/`            | `/home/devbox/app/.devbox/` | If exists and `--no-devbox` not set |
-| `<agentbox-dir>/skills/`         | `/home/devbox/app/skills`   | If directory exists          |
-| `<agentbox-dir>/workflows/`      | `/home/devbox/app/workflows`| If directory exists          |
-| `<agentbox-dir>/cache/<agent>/npm-global` | `/home/devbox/.npm-global` | Agent installs (`npm -g`)   |
-| `<agentbox-dir>/cache/<agent>/local`      | `/home/devbox/.local`      | e.g. curl-based CLI binaries |
-
-If a `.devbox` directory exists at the git root, it is automatically mounted
-into the container at `/home/devbox/app/.devbox/`. This allows devbox package
-configurations and profiles to be shared across sessions. The mount is skipped
-if `--no-devbox` is specified.
+| Host path                                 | Container path                  | Notes                     |
+|-------------------------------------------|---------------------------------|---------------------------|
+| `<worktree>`                              | `/home/agentbox/app`            | Project files, read-write |
+| `~/<agent-config-dir>`                    | `/home/agentbox/<config-dir>`   | Agent credentials/config  |
+| `~/.ssh/` (if present)                    | `/home/agentbox/.ssh/`          | Read-only                 |
+| `~/.ssh/known_hosts` (if present)         | `/home/agentbox/.ssh/known_hosts` | Read-only               |
+| `<agentbox-dir>/skills/`                  | `/home/agentbox/app/skills`     | If directory exists       |
+| `<agentbox-dir>/workflows/`               | `/home/agentbox/app/workflows`  | If directory exists       |
+| `<agentbox-dir>/cache/<agent>/npm-global` | `/home/agentbox/.npm-global`    | Agent installs (`npm -g`) |
+| `<agentbox-dir>/cache/<agent>/local`      | `/home/agentbox/.local`         | e.g. curl-based CLIs      |
 
 The cache directories are created automatically. Each `--agent` value has its
 own cache so installs do not collide.
@@ -223,15 +232,74 @@ without port mapping.
 
 ### Environment variables
 
-The following variables are always set inside the container:
+The following variables are set inside the container:
 
-| Variable                  | Value                        |
-|---------------------------|------------------------------|
-| `HOME`                    | `/home/devbox`               |
-| `CLAUDE_CONFIG_DIR`       | `/home/devbox/.claude`       |
+| Variable            | Value                          |
+|---------------------|--------------------------------|
+| `HOME`              | `/home/agentbox`               |
+| `CLAUDE_CONFIG_DIR` | `/home/agentbox/.claude`       |
+| `NPM_CONFIG_PREFIX` | `/home/agentbox/.npm-global`   |
 
 Additional variables are forwarded from the host via `auto_envs.conf` (see
 below).
+
+---
+
+## Custom images
+
+The `--image` flag lets you bring your own container image as the runtime
+environment. agentbox layers the agentbox environment on top of it so the
+agent CLI works regardless of what the base image contains.
+
+    agentbox start --image rust:bookworm --agent claude-code
+    agentbox start --image ./MyDockerfile --agent qwen-code
+
+### How it works
+
+When `--image` is used agentbox performs the following build steps before
+starting the container:
+
+1. **Build `agentbox-image`** from the local `Containerfile` as usual. This
+   image is used as the source for node/npm if they are missing from your
+   image.
+
+2. **Build the user image.** If the value is a path to a local
+   `Containerfile`/`Dockerfile`, it is built first and tagged
+   `agentbox-user-image`. If it is an image reference (e.g. `rust:bookworm`),
+   it is pulled/used directly.
+
+3. **Build the runtime image.** A thin wrapper `Containerfile` is generated
+   and built on top of the user image. This wrapper:
+   - Copies the node runtime (`node`, `npm`, `npx` and `node_modules`) from
+     `agentbox-image` if the user image does not already have node.
+   - Creates `/home/agentbox` with the correct directory structure and
+     ownership (`chown -R <host-uid>:<host-gid>`).
+   - Sets `HOME`, `NPM_CONFIG_PREFIX`, `PATH`, and `WORKDIR` to the agentbox
+     conventions.
+
+   The result is tagged `agentbox-user-image`. Because Docker/Podman layer
+   caching applies, subsequent runs with an unchanged user image are instant.
+
+4. **Pre-populate the tool cache.** A one-shot installer container runs from
+   `agentbox-image` to install the agent CLI into the on-disk cache
+   (`<agentbox-dir>/cache/<agent-type>/`). Subsequent runs skip this if the
+   CLI is already cached.
+
+5. **Start the runtime container** (`agentbox-user-image`) with the tool cache
+   mounted at `/home/agentbox/.npm-global` and `/home/agentbox/.local`.
+
+### What you get in the container
+
+- Your image's toolchain is fully preserved and available in `PATH` (e.g.
+  `cargo`, `go`, system packages).
+- The agent CLI (`claude`, `qwen`, etc.) is installed and on `PATH`.
+- The project is mounted at `/home/agentbox/app` (the working directory).
+- Agent config and credentials are mounted from the host as usual.
+
+### Requirements
+
+The user image must have `bash` available. glibc-based images (Debian, Ubuntu,
+Fedora, RHEL) work out of the box. Alpine/musl images are not supported.
 
 ---
 
@@ -270,6 +338,21 @@ Example:
     export GOPRIVATE=github.com/myorg*
     export NODE_OPTIONS=--max-old-space-size=4096
 
+### default_mounts.conf
+
+Extra volume mounts added to every container. Format: `host:container[:options]`,
+one per line.
+
+The container path may start with `./` to be resolved relative to the project
+workdir. The following variables are expanded in both paths:
+
+| Variable              | Expands to                              |
+|-----------------------|-----------------------------------------|
+| `${CONTAINER_HOME}`   | Container home directory (`/home/agentbox`) |
+| `${CONTAINER_WORKDIR}`| Container working directory             |
+| `${HOME}`             | Host user home directory                |
+| `${AGENT_DIR}`        | agentbox installation directory         |
+
 ### defaults.conf
 
 General configuration options for agentbox. One `key=value` pair per line.
@@ -285,9 +368,7 @@ Example:
 
 If a `skills/` or `workflows/` directory exists in the agentbox installation
 directory, it is mounted into the container at
-`/home/devbox/app/skills` and `/home/devbox/app/workflows` respectively.
-These directories are intended for agent-specific skill definitions and
-workflow configurations.
+`/home/agentbox/app/skills` and `/home/agentbox/app/workflows` respectively.
 
 ---
 
@@ -301,6 +382,7 @@ Completion includes:
 - Subcommands: `start`, `stop`, `resume`, `help`
 - Options: `-v`, `--verbose`, `-s`, `--use-stash`, `--agent`, etc.
 - Agent types: `claude-code`, `qwen-code`, `opencode-ai`, `cursor`
+- File path suggestions for `--image`
 
 ### Manual Setup
 
@@ -342,15 +424,21 @@ When `agentbox start` is invoked the following steps occur in order:
 3. Stash changes in the current worktree if `--use-stash` (skipped with `--no-git`).
 4. Create the git worktree and branch, or reuse if already present (skipped with `--no-git`).
 5. Pop the stash into the new worktree if `--use-stash` (skipped with `--no-git`).
-6. Build the container image with the caller's UID/GID as build args.
-7. Write the state file.
-8. If the container name already exists and is running, attach to it.
-9. If the container name exists but is stopped, remove it and start fresh.
-10. Inside the new container, in order:
+6. Build `agentbox-image` from the local `Containerfile`.
+7. If `--image` is set:
+   a. Build the user image (if a local file path was given).
+   b. Build the combined runtime image, layering node (if needed) and the
+      agentbox environment on top of the user image.
+   c. Run a one-shot installer container to pre-populate the agent CLI cache.
+8. Write the session state file.
+9. If the container name already exists and is running, attach to it.
+10. If the container name exists but is stopped, remove it and start fresh.
+11. Inside the new container, in order:
     a. Source `pre_start.sh` (if present).
-    b. Install the agent (skipped if the CLI binary already exists in the
-       persisted cache, unless `--refresh-cache` cleared it).
-    c. Launch the agent CLI (or `devbox shell`, or `bash` depending on flags).
-11. On exit — whether the container exits normally, the script is interrupted,
+    b. Install the agent CLI (skipped if already in the persisted cache, unless
+       `--refresh-cache` cleared it). Skipped entirely when `--image` is used,
+       since the cache was pre-populated in step 7c.
+    c. Launch the agent CLI (or `bash` if `--no-autostart`).
+12. On exit — whether the container exits normally, the script is interrupted,
     or a failure occurs — print the worktree path so the user knows where to
     find the agent's changes.
