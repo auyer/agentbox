@@ -83,6 +83,9 @@ function usage() {
 	printf '                            Can be specified multiple times.\n'
 	printf '  --refresh-cache           Remove cached agent install for this\n'
 	printf '                            agent type, then reinstall on start\n'
+	printf '  --privileged              Run the container in privileged mode\n'
+	printf '                            (enables Docker-in-Docker and full\n'
+	printf '                            device access; off by default)\n'
 	printf '\nGlobal options:\n'
 	printf '  -v, --verbose             Print container commands before\n'
 	printf '                            running them\n'
@@ -268,6 +271,7 @@ function build_run_args() {
 	local agent_type="${4}"
 	local use_devbox="${5:-1}"
 	local git_root="${6:-}"
+	local privileged="${7:-0}"
 	local config_pair container_config_dir config_dir
 	local -a args
 
@@ -301,6 +305,9 @@ function build_run_args() {
 	if [[ "${cmd}" == 'podman' ]]; then
 		args+=('--userns=keep-id')
 		selinux=':z'
+	fi
+	if [[ "${privileged}" -eq 1 ]]; then
+		args+=('--privileged')
 	fi
 
 	args+=("--volume=${worktree_path}:/home/devbox/app${selinux}")
@@ -366,6 +373,7 @@ function cmd_start() {
 	local yolo=0
 	local no_git=0
 	local refresh_cache=0
+	local privileged=0
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_base cli_cmd
 	local -a run_args
@@ -410,6 +418,10 @@ function cmd_start() {
 			;;
 		--refresh-cache)
 			refresh_cache=1
+			shift
+			;;
+		--privileged)
+			privileged=1
 			shift
 			;;
 		--mount)
@@ -537,7 +549,8 @@ EOF
 	mapfile -t run_args < <(
 		build_run_args \
 			"${cmd}" "${worktree_path}" "${container_name}" \
-			"${agent_type}" "${use_devbox}" "${git_root:-}"
+			"${agent_type}" "${use_devbox}" "${git_root:-}" \
+			"${privileged}"
 	)
 
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"

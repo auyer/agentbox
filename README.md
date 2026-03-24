@@ -130,6 +130,13 @@ step runs again. Use this to upgrade after a new agent release. Without this
 flag, if the agent CLI is already present in the cache from a previous
 session, the install command is skipped.
 
+    --privileged
+
+Run the container with the `--privileged` flag. This grants the container full
+access to host devices and disables the default seccomp/AppArmor profiles,
+which is required for Docker-in-Docker (dind) workflows. Off by default — only
+use this when the agent session specifically needs to run a container daemon.
+
 ---
 
 ### agentbox stop
