@@ -23,6 +23,15 @@ declare -A AGENT_INSTALL_CMDS=(
 	['cursor']='curl https://cursor.com/install -fsS | bash'
 )
 
+# Agent type → extra environment variables to set inside the container
+# Space-separated KEY=VALUE pairs; values use container-side paths
+declare -A AGENT_EXTRA_ENVS=(
+	['claude-code']='CLAUDE_CONFIG_DIR=/home/devbox/.claude'
+	['qwen-code']=''
+	['opencode-ai']=''
+	['cursor']=''
+)
+
 # Agent type → CLI binary to launch after install
 declare -A AGENT_CLI_CMDS=(
 	['claude-code']='claude'
@@ -273,6 +282,15 @@ function build_run_args() {
 		"--name=${container_name}"
 		'--env=HOME=/home/devbox'
 	)
+
+	# Agent-specific environment variables
+	local extra_envs="${AGENT_EXTRA_ENVS[${agent_type}]:-}"
+	if [[ -n "${extra_envs}" ]]; then
+		local env_pair
+		for env_pair in ${extra_envs}; do
+			args+=("--env=${env_pair}")
+		done
+	fi
 
 	# Always run as the host user so the process is never root.
 	# --userns=keep-id (podman) maps host UID into the container
