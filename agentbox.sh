@@ -68,7 +68,7 @@ function usage() {
 	printf '  --dangerously-skip-permissions\n'
 	printf '                            Run agent in yolo mode\n'
 	printf '                            (off by default)\n'
-	printf '  --no-git                  Run without a git repository.\n'
+	printf '  --no-git-worktree                  Run without a git repository.\n'
 	printf '                            Mounts the current directory;\n'
 	printf '                            skips worktree and branch creation\n'
 	printf '  --mount <host:container>  Mount a host path into the container.\n'
@@ -558,7 +558,7 @@ function cmd_start() {
 			yolo=1
 			shift
 			;;
-		--no-git)
+		--no-git-worktree)
 			no_git=1
 			shift
 			;;

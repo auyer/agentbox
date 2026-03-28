@@ -27,7 +27,7 @@
 # --use-stash
 
 # Skip git worktree creation; mount the current directory directly
-# --no-git
+# --no-git-worktree
 
 # Print every podman/docker command before running it
 # --verbose

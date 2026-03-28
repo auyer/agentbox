@@ -58,23 +58,24 @@ the rc file.
 ### agentbox start
 
 Creates a git worktree on a new branch, builds the container image, and
-launches the agent inside the container. When `--no-git` is passed, the git
-steps are skipped and the current directory is mounted directly.
+launches the agent inside the container. When `--no-git-worktree` is passed,
+no branch or worktree is created — the current directory is mounted into the
+container as-is.
 
     agentbox start [BRANCH] [OPTIONS]
 
 **BRANCH**
 
-The name of the git branch and worktree to create, or a session label when
-using `--no-git`. Defaults to `agentbox-<ISO date>` (e.g.
-`agentbox-2026-03-16`). Slashes are replaced with dashes when deriving the
-container name.
+The name of the git branch and worktree to create. Defaults to
+`agentbox-<ISO date>` (e.g. `agentbox-2026-03-16`). Slashes are replaced with
+dashes when deriving the container name.
 
-In git mode the worktree is created at
-`<git-root>/agentbox-worktrees/<branch>`. If the directory already exists it
-is reused without error, allowing a session to be restarted on the same
-branch. In `--no-git` mode this argument serves only as a label for the
-container name.
+The worktree is created at `<git-root>/agentbox-worktrees/<branch>`. If the
+directory already exists it is reused without error, allowing a session to be
+restarted on the same branch.
+
+Ignored when `--no-git-worktree` is passed — the argument is not accepted in
+that mode.
 
 **Options**
 
@@ -109,12 +110,13 @@ manually.
 Pass `--dangerously-skip-permissions` to the agent CLI at launch. This
 disables the agent's interactive permission prompts. Off by default.
 
-    --no-git
+    --no-git-worktree
 
-Start a session without a git repository. The current working directory is
-mounted as the workspace instead of a dedicated worktree. Branch creation,
-stash, and worktree removal steps are skipped entirely. Useful for running an
-agent against a plain directory or a project that does not use git.
+Mount the current directory into the container as-is, without creating a
+branch or worktree. The agent works directly inside your existing directory —
+no separate folder is created, no branch is checked out, and `--use-stash` has
+no effect. Useful when you want the agent to operate on the current state of
+the project without isolation, or when the project does not use git.
 
     --refresh-cache
 
@@ -450,12 +452,13 @@ container is started.
 
 When `agentbox start` is invoked the following steps occur in order:
 
-1. Verify the current directory is inside a git repository (skipped with `--no-git`).
+1. Verify the current directory is inside a git repository (skipped with `--no-git-worktree`).
 2. If a container with the computed name already exists and is running, attach to it and exit.
    If it exists but is stopped, remove it.
-3. Stash changes in the current worktree if `--use-stash` (skipped with `--no-git`).
-4. Create the git worktree and branch, or reuse if already present (skipped with `--no-git`).
-5. Pop the stash into the new worktree if `--use-stash` (skipped with `--no-git`).
+3. Stash changes in the current worktree if `--use-stash` (skipped with `--no-git-worktree`).
+4. Create the git worktree and branch, or reuse if already present. With `--no-git-worktree`
+   this step is skipped entirely — the current directory is used directly.
+5. Pop the stash into the new worktree if `--use-stash` (skipped with `--no-git-worktree`).
 6. Build `agentbox-image` from the local `Containerfile`.
 7. If `--image` is set:
    a. Build the user image (if a local file path was given).
