@@ -2,10 +2,15 @@
 set -euo pipefail
 
 AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_DIR="${AGENT_DIR}/.agentbox-state"
 VERBOSE=0
 FORCE_DOCKER=0
 declare -a EXTRA_MOUNTS=()
+
+# Globals set by cmd_start; read by _on_exit trap
+WORKTREE_PATH_HINT=''
+CONTAINER_NAME_HINT=''
+KEEP_CONTAINER_HINT=0
+CMD_HINT=''
 
 # Agent type → host:container config dir pairs
 # Host folder stays the same for all tools; container folder differs for opencode-ai
@@ -42,26 +47,15 @@ declare -A AGENT_CLI_CMDS=(
 	['cursor']='cursor-agent'
 )
 
-function get_state_file() {
-	local project_name git_root
-	if git_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-		project_name="$(basename "${git_root}")"
-	else
-		project_name="$(basename "$(pwd)")"
-	fi
-	printf '%s/%s.state' "${STATE_DIR}" "${project_name}"
-}
-
 function usage() {
-	printf 'Usage: agentbox <command> [options]\n'
+	printf 'Usage: agentbox [BRANCH] [OPTIONS]\n'
+	printf '       agentbox start [BRANCH] [OPTIONS]\n'
 	printf '\n'
 	printf 'Commands:\n'
-	printf '  start [BRANCH] [OPTIONS]  Start a new agent session\n'
-	printf '  stop                      Stop the current agent session\n'
-	printf '  resume                    Resume a running agent session\n'
+	printf '  start [BRANCH] [OPTIONS]  Start a new agent session (default)\n'
 	printf '  help                      Show this help message\n'
 	printf '\n'
-	printf 'Start options:\n'
+	printf 'Options:\n'
 	printf '  BRANCH                    Branch name'
 	printf ' (default: agentbox-<date>)\n'
 	printf '  -a, --agent <type>        Agent type (default: claude-code)\n'
@@ -86,6 +80,10 @@ function usage() {
 	printf '  --privileged              Run the container in privileged mode\n'
 	printf '                            (enables Docker-in-Docker and full\n'
 	printf '                            device access; off by default)\n'
+	printf '  --keep-container          Do not remove the container on exit.\n'
+	printf '                            The reconnect command is printed on\n'
+	printf '                            exit. By default containers are\n'
+	printf '                            removed automatically (--rm).\n'
 	printf '  --image <image-ref>       Use a custom container image instead\n'
 	printf '                            of building from Containerfile.\n'
 	printf '                            Requires a glibc-based image with\n'
@@ -103,16 +101,17 @@ function print_worktree_hint() {
 	printf 'Review the changes there before merging into your main branch.\n'
 }
 
-# Print the worktree hint on any exit so changes are never silently lost.
+# Print worktree hint (and reconnect hint when --keep-container was used)
+# on any exit so changes and container names are never silently lost.
 function _on_exit() {
-	local state_file
-	state_file="$(get_state_file)"
-	if [[ -f "${state_file}" ]]; then
-		# shellcheck source=/dev/null
-		source "${state_file}"
-		if [[ -n "${WORKTREE_PATH:-}" ]]; then
-			print_worktree_hint "${WORKTREE_PATH}"
-		fi
+	if [[ -n "${WORKTREE_PATH_HINT}" ]]; then
+		print_worktree_hint "${WORKTREE_PATH_HINT}"
+	fi
+	if [[ "${KEEP_CONTAINER_HINT}" -eq 1 ]] && [[ -n "${CONTAINER_NAME_HINT}" ]]; then
+		printf '\nContainer was kept. To reconnect:\n'
+		printf '  %s exec -it %s bash\n' "${CMD_HINT}" "${CONTAINER_NAME_HINT}"
+		printf 'To stop and remove it:\n'
+		printf '  %s rm -f %s\n' "${CMD_HINT}" "${CONTAINER_NAME_HINT}"
 	fi
 }
 trap '_on_exit' EXIT
@@ -147,40 +146,6 @@ function get_git_root() {
 		exit 2 # ENOENT
 	}
 	printf '%s' "${git_root}"
-}
-
-function read_state() {
-	local state_file
-	state_file="$(get_state_file)"
-	if [[ ! -f "${state_file}" ]]; then
-		printf 'ERROR: no active session (state file not found)\n' >&2
-		printf 'Hint: run "agent start" to begin a new session\n' >&2
-		exit 2 # ENOENT
-	fi
-	# shellcheck source=/dev/null
-	source "${state_file}"
-}
-
-function check_no_active_session() {
-	local cmd running state_file
-	state_file="$(get_state_file)"
-	if [[ ! -f "${state_file}" ]]; then
-		return 0
-	fi
-	# shellcheck source=/dev/null
-	source "${state_file}"
-	cmd="$(detect_container_cmd)"
-	running="$(
-		run_cmd "${cmd}" inspect "${CONTAINER_NAME}" \
-			--format '{{.State.Running}}' 2>/dev/null ||
-			printf 'false'
-	)"
-	if [[ "${running}" == 'true' ]]; then
-		printf 'ERROR: an agent session is already active\n' >&2
-		printf 'Hint: run "agent resume" to attach or' >&2
-		printf ' "agent stop" to stop it\n' >&2
-		exit 16 # EBUSY
-	fi
 }
 
 # Expand ~ and ${HOME} / ${AGENT_DIR} / ${CONTAINER_HOME} /
@@ -290,6 +255,7 @@ function build_run_args() {
 	local custom_image="${7:-}"
 	local container_home="${8:-/home/agentbox}"
 	local container_workdir="${9:-/home/agentbox/app}"
+	local keep_container="${10:-0}"
 	local config_pair container_config_dir config_dir
 	local -a args
 
@@ -305,6 +271,11 @@ function build_run_args() {
 		"--name=${container_name}"
 		"--env=HOME=${container_home}"
 	)
+
+	# Auto-remove the container on exit unless --keep-container was requested.
+	if [[ "${keep_container}" -eq 0 ]]; then
+		args+=('--rm')
+	fi
 
 	# If this agent type uses an env var to locate its config dir, set it
 	# to the container-side path extracted from AGENT_CONFIG_DIRS above.
@@ -483,6 +454,7 @@ function cmd_start() {
 	local no_git=0
 	local refresh_cache=0
 	local privileged=0
+	local keep_container=0
 	local custom_image=''
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_base cli_cmd
@@ -528,6 +500,10 @@ function cmd_start() {
 			;;
 		--privileged)
 			privileged=1
+			shift
+			;;
+		--keep-container)
+			keep_container=1
 			shift
 			;;
 		--image)
@@ -601,9 +577,31 @@ function cmd_start() {
 		container_name="agentbox-${project_name}-${sanitized_branch}"
 	fi
 
-	check_no_active_session
 	cmd="$(detect_container_cmd)"
-	mkdir -p "${STATE_DIR}"
+
+	# Set globals for _on_exit trap
+	WORKTREE_PATH_HINT="${worktree_path}"
+	CONTAINER_NAME_HINT="${container_name}"
+	KEEP_CONTAINER_HINT="${keep_container}"
+	CMD_HINT="${cmd}"
+
+	# If a container with this name already exists, attach to it (if running)
+	# or remove it (if stopped) so we can start fresh.
+	local existing_state
+	existing_state="$(
+		run_cmd "${cmd}" inspect "${container_name}" \
+			--format '{{.State.Running}}' 2>/dev/null ||
+			printf 'absent'
+	)"
+	if [[ "${existing_state}" == 'true' ]]; then
+		printf 'Container already running — attaching...\n'
+		run_cmd "${cmd}" exec --interactive --tty "${container_name}" /bin/bash
+		return 0
+	elif [[ "${existing_state}" != 'absent' ]]; then
+		printf 'Removing stopped container %s...\n' "${container_name}"
+		run_cmd "${cmd}" rm "${container_name}" 2>/dev/null || \
+			printf 'WARNING: could not remove container (already gone?), continuing\n'
+	fi
 
 	if [[ "${no_git}" -eq 0 ]]; then
 		if [[ "${use_stash}" -eq 1 ]]; then
@@ -697,18 +695,6 @@ DOCKERFILE
 		custom_image='agentbox-user-image'
 	fi
 
-	# Write state file before launching container
-	local state_file="${STATE_DIR}/${project_name}.state"
-	cat >"${state_file}" <<EOF
-CONTAINER_NAME=${container_name}
-WORKTREE_PATH=${worktree_path}
-BRANCH_NAME=${branch_name}
-AGENT_TYPE=${agent_type}
-GIT_ROOT=${git_root:-}
-NO_GIT=${no_git}
-CUSTOM_IMAGE=${custom_image}
-EOF
-
 	local cache_base="${AGENT_DIR}/cache/${agent_type}"
 	if [[ "${refresh_cache}" -eq 1 ]]; then
 		printf 'Refreshing agent tool cache at %s\n' "${cache_base}"
@@ -727,7 +713,8 @@ EOF
 			"${cmd}" "${worktree_path}" "${container_name}" \
 			"${agent_type}" "${git_root:-}" \
 			"${privileged}" "${custom_image}" \
-			"${container_home}" "${container_workdir}"
+			"${container_home}" "${container_workdir}" \
+			"${keep_container}"
 	)
 
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"
@@ -735,25 +722,6 @@ EOF
 	cli_cmd="${cli_base}"
 	if [[ "${yolo}" -eq 1 ]]; then
 		cli_cmd="${cli_cmd} --dangerously-skip-permissions"
-	fi
-
-	# If the container already exists, resume or remove it
-	local existing_state
-	existing_state="$(
-		run_cmd "${cmd}" inspect "${container_name}" \
-			--format '{{.State.Running}}' 2>/dev/null ||
-			printf 'absent'
-	)"
-
-	printf 'Container state: %s\n' "${existing_state}"
-	if [[ "${existing_state}" == 'true' ]]; then
-		printf 'Container already running — resuming...\n'
-		run_cmd "${cmd}" exec --interactive --tty "${container_name}" /bin/bash
-		return 0
-	elif [[ "${existing_state}" != 'absent' ]]; then
-		printf 'Removing stopped container %s...\n' "${container_name}"
-		run_cmd "${cmd}" rm "${container_name}" 2>/dev/null || \
-			printf 'WARNING: could not remove container (already gone?), continuing\n'
 	fi
 
 	local launch_cmd
@@ -803,46 +771,6 @@ EOF
 	fi
 }
 
-function cmd_stop() {
-	local cmd answer state_file
-	state_file="$(get_state_file)"
-	read_state
-	cmd="$(detect_container_cmd)"
-
-	printf 'Stopping container %s...\n' "${CONTAINER_NAME}"
-	run_cmd "${cmd}" stop "${CONTAINER_NAME}" 2>/dev/null || true
-	run_cmd "${cmd}" rm "${CONTAINER_NAME}" 2>/dev/null || true
-
-	# Remove state file before exit so the EXIT trap does not double-print.
-	# The hint is printed explicitly here instead.
-	local worktree_path_snapshot="${WORKTREE_PATH}"
-	rm --force "${state_file}"
-	printf 'Session stopped.\n'
-	if [[ -n "${worktree_path_snapshot}" ]]; then
-		print_worktree_hint "${worktree_path_snapshot}"
-	fi
-}
-
-function cmd_resume() {
-	local cmd running
-	read_state
-	cmd="$(detect_container_cmd)"
-	running="$(
-		run_cmd "${cmd}" inspect "${CONTAINER_NAME}" \
-			--format '{{.State.Running}}' 2>/dev/null ||
-			printf 'false'
-	)"
-
-	if [[ "${running}" != 'true' ]]; then
-		printf 'ERROR: container %s is not running\n' \
-			"${CONTAINER_NAME}" >&2
-		printf 'Hint: run "agent start" to start a new session\n' >&2
-		exit 3 # ESRCH
-	fi
-
-	run_cmd "${cmd}" exec --interactive --tty "${CONTAINER_NAME}" /bin/bash
-}
-
 # --- strip global flags before dispatch ---
 _filtered=()
 for _arg in "$@"; do
@@ -866,23 +794,19 @@ fi
 unset _arg _filtered
 
 # --- dispatch ---
-case "${1:-help}" in
+# "agentbox [ARGS...]" is equivalent to "agentbox start [ARGS...]".
+# "start" is kept as an explicit alias for backwards compatibility.
+case "${1:-}" in
 start)
 	shift
 	cmd_start "$@"
-	;;
-stop)
-	cmd_stop
-	;;
-resume)
-	cmd_resume
 	;;
 help | --help | -h)
 	usage
 	;;
 *)
-	printf 'Unknown command: %s\n' "${1}" >&2
-	usage
-	exit 1
+	# No subcommand given, or first arg is a branch name / option:
+	# forward everything directly to cmd_start.
+	cmd_start "$@"
 	;;
 esac

@@ -43,13 +43,12 @@ the rc file.
 
 ## Usage
 
-    agentbox <command> [options]
+    agentbox [BRANCH] [OPTIONS]
+    agentbox start [BRANCH] [OPTIONS]   # backwards-compatible alias
 
 ### Commands
 
-    agentbox start [BRANCH] [OPTIONS]
-    agentbox stop
-    agentbox resume
+    agentbox [BRANCH] [OPTIONS]
     agentbox help
 
 ---
@@ -130,6 +129,17 @@ access to host devices and disables the default seccomp/AppArmor profiles,
 which is required for Docker-in-Docker (dind) workflows. Off by default — only
 use this when the agent session specifically needs to run a container daemon.
 
+    --keep-container
+
+Do not pass `--rm` to the container runtime. By default the container is
+automatically removed when the session ends. With this flag the container
+persists after exit; on exit agentbox prints the exact command to reconnect:
+
+    podman exec -it agentbox-myproject-my-branch bash
+
+Use the printed `podman rm -f <name>` (or `docker rm -f <name>`) command to
+clean up the container when you no longer need it.
+
     --image <image-ref|path>
 
 Use a user-provided container image as the base runtime environment instead of
@@ -147,35 +157,6 @@ Variables `${CONTAINER_HOME}`, `${CONTAINER_WORKDIR}`, `${HOME}`, and
     --docker
 
 Force the use of `docker` even when `podman` is available.
-
----
-
-### agentbox stop
-
-Stops and removes the running container, then prints the path to the worktree
-where the agent made its changes.
-
-    agentbox stop
-
-The worktree and its branch are never deleted automatically. After stopping,
-review the changes in the printed directory and merge them manually when
-ready. The session can be restarted on the same branch with
-`agentbox start <branch>`.
-
-The worktree path is also printed whenever agentbox exits for any reason,
-including container exit, script interruption, or failure. This ensures the
-location of any uncommitted changes is never silently lost.
-
----
-
-### agentbox resume
-
-Attaches to a container that is already running.
-
-    agentbox resume
-
-If the container is not running, an error is printed with a hint to use
-`agentbox start`.
 
 ---
 
@@ -379,7 +360,7 @@ script is automatically sourced in your shell rc file during installation.
 
 Completion includes:
 
-- Subcommands: `start`, `stop`, `resume`, `help`
+- Subcommands: `start`, `help`
 - Options: `-v`, `--verbose`, `-s`, `--use-stash`, `--agent`, etc.
 - Agent types: `claude-code`, `qwen-code`, `opencode-ai`, `cursor`
 - File path suggestions for `--image`
@@ -399,19 +380,25 @@ If completion doesn't work automatically, add this to your shell rc file:
 
 ## Session state
 
-agentbox stores the active session in `.agentbox-state` in the installation
-directory. The file is a plain `key=value` list written at session start and
-deleted at `agentbox stop`.
+agentbox does not maintain a session state file. Container lifecycle is
+managed directly by podman/docker.
 
-    CONTAINER_NAME=agentbox-my-branch
-    WORKTREE_PATH=/path/to/repo/agentbox-worktrees/my-branch
-    BRANCH_NAME=my-branch
-    AGENT_TYPE=claude-code
-    GIT_ROOT=/path/to/repo
+By default containers are run with `--rm` and are automatically removed when
+the session ends. The worktree path is always printed on exit so uncommitted
+changes are never silently lost.
 
-Only one session is active at a time. Starting a second session while a
-container is running will either resume the existing container (if the same
-container name is detected) or print an error.
+With `--keep-container` the container persists after the session ends.
+agentbox prints the exact command to reconnect on exit:
+
+    Container was kept. To reconnect:
+      podman exec -it agentbox-myproject-my-branch bash
+    To stop and remove it:
+      podman rm -f agentbox-myproject-my-branch
+
+If you start a new session using the same branch name while a container with
+that name is already running, agentbox attaches to it instead of starting a
+new one. If the container exists but is stopped, it is removed and a fresh
+container is started.
 
 ---
 
@@ -420,7 +407,8 @@ container name is detected) or print an error.
 When `agentbox start` is invoked the following steps occur in order:
 
 1. Verify the current directory is inside a git repository (skipped with `--no-git`).
-2. Check that no session is already active.
+2. If a container with the computed name already exists and is running, attach to it and exit.
+   If it exists but is stopped, remove it.
 3. Stash changes in the current worktree if `--use-stash` (skipped with `--no-git`).
 4. Create the git worktree and branch, or reuse if already present (skipped with `--no-git`).
 5. Pop the stash into the new worktree if `--use-stash` (skipped with `--no-git`).
@@ -430,15 +418,12 @@ When `agentbox start` is invoked the following steps occur in order:
    b. Build the combined runtime image, layering node (if needed) and the
       agentbox environment on top of the user image.
    c. Run a one-shot installer container to pre-populate the agent CLI cache.
-8. Write the session state file.
-9. If the container name already exists and is running, attach to it.
-10. If the container name exists but is stopped, remove it and start fresh.
-11. Inside the new container, in order:
-    a. Source `pre_start.sh` (if present).
-    b. Install the agent CLI (skipped if already in the persisted cache, unless
-       `--refresh-cache` cleared it). Skipped entirely when `--image` is used,
-       since the cache was pre-populated in step 7c.
-    c. Launch the agent CLI (or `bash` if `--no-autostart`).
-12. On exit — whether the container exits normally, the script is interrupted,
-    or a failure occurs — print the worktree path so the user knows where to
-    find the agent's changes.
+8. Start the container (with `--rm` unless `--keep-container` was passed). Inside:
+   a. Source `pre_start.sh` (if present).
+   b. Install the agent CLI (skipped if already in the persisted cache, unless
+      `--refresh-cache` cleared it). Skipped entirely when `--image` is used,
+      since the cache was pre-populated in step 7c.
+   c. Launch the agent CLI (or `bash` if `--no-autostart`).
+9. On exit — whether the container exits normally, the script is interrupted,
+   or a failure occurs — print the worktree path. If `--keep-container` was
+   used, also print the reconnect and remove commands.
