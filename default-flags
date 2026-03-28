@@ -1,0 +1,42 @@
+# default-flags — default command-line flags for agentbox
+#
+# Flags listed here are prepended to every invocation.
+# CLI flags always override these (last-one-wins for scalar flags).
+# Lines starting with # and blank lines are ignored.
+# Values with spaces are not supported.
+
+# Agent type  (options: claude-code, qwen-code, opencode-ai, cursor)
+--agent claude-code
+
+# Pass --dangerously-skip-permissions to the agent CLI by default
+# --dangerously-skip-permissions
+
+# Drop into a shell instead of launching the agent automatically
+# --no-autostart
+
+# Skip automatic devcontainer.json detection
+# --no-devcontainer
+
+# Keep the container after the session ends (print reconnect command on exit)
+# --keep-container
+
+# Run the container in privileged mode (required for Docker-in-Docker)
+# --privileged
+
+# Stash uncommitted changes and apply them to the new worktree
+# --use-stash
+
+# Skip git worktree creation; mount the current directory directly
+# --no-git
+
+# Print every podman/docker command before running it
+# --verbose
+
+# Use docker even when podman is available
+# --docker
+
+# Use a custom container image or Dockerfile as the base
+# --image my-registry/my-image:tag
+
+# Always mount an extra host path into every container
+# --mount ~/notes:/home/agentbox/notes

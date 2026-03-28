@@ -376,16 +376,18 @@ workdir. The following variables are expanded in both paths:
 | `${HOME}`             | Host user home directory                |
 | `${AGENT_DIR}`        | agentbox installation directory         |
 
-### defaults.conf
+### default-flags
 
-General configuration options for agentbox. One `key=value` pair per line.
-Lines starting with `#` are comments.
+Default command-line flags prepended to every agentbox invocation. One flag
+(and its value, if any) per line. Lines starting with `#` and blank lines are
+ignored. CLI flags always override these — specifying a flag twice is fine.
 
-Example:
+All supported flags are listed in the file as commented-out examples. To set
+a default, uncomment the relevant line. Example:
 
-    # Default agent type to use when --agent is not specified
-    # Options: claude-code, qwen-code, opencode-ai, cursor
-    DEFAULT_AGENT=claude-code
+    # Always use qwen-code and skip the agent permission prompts
+    --agent qwen-code
+    --dangerously-skip-permissions
 
 ### skills/ and workflows/
 

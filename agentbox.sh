@@ -534,13 +534,7 @@ function cmd_start() {
 	local install_cmd cli_base cli_cmd
 	local -a run_args
 
-	# Load defaults from defaults.conf
-	agent_type='claude-code'
-	if [[ -f "${AGENT_DIR}/defaults.conf" ]]; then
-		# shellcheck source=/dev/null
-		source "${AGENT_DIR}/defaults.conf"
-		agent_type="${DEFAULT_AGENT:-claude-code}"
-	fi
+	local agent_type='claude-code'
 
 	while [[ $# -gt 0 ]]; do
 		case "${1}" in
@@ -880,6 +874,26 @@ DOCKERFILE
 			"${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}"
 	fi
 }
+
+# --- load default-flags ---
+# Prepend flags from default-flags to $@ so CLI flags override them.
+_defaults_file="${AGENT_DIR}/default-flags"
+if [[ -f "${_defaults_file}" ]]; then
+	_defaults=()
+	while IFS= read -r _line; do
+		_line="${_line%%#*}"                        # strip inline comments
+		_line="${_line#"${_line%%[![:space:]]*}"}"  # ltrim whitespace
+		_line="${_line%"${_line##*[![:space:]]}"}"  # rtrim whitespace
+		[[ -z "${_line}" ]] && continue
+		read -ra _words <<< "${_line}"
+		_defaults+=("${_words[@]}")
+	done < "${_defaults_file}"
+	if (( ${#_defaults[@]} > 0 )); then
+		set -- "${_defaults[@]}" "$@"
+	fi
+	unset _defaults _words _line
+fi
+unset _defaults_file
 
 # --- strip global flags before dispatch ---
 _filtered=()

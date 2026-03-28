@@ -12,7 +12,7 @@ FILES_TO_COPY=(
 	'auto_envs.conf'
 	'pre_start.sh'
 	'default_mounts.conf'
-	'defaults.conf'
+	'default-flags'
 	'setup.sh'
 )
 
@@ -21,7 +21,7 @@ CONFIG_FILES=(
 	'auto_envs.conf'
 	'pre_start.sh'
 	'default_mounts.conf'
-	'defaults.conf'
+	'default-flags'
 )
 
 function usage() {
@@ -84,6 +84,27 @@ function cmd_install() {
 	mv "${INSTALL_DIR}/agentbox.sh" "${INSTALL_DIR}/agentbox"
 	chmod +x "${INSTALL_DIR}/agentbox"
 
+	# Ask for the default agent and update default-flags in place.
+	local df="${INSTALL_DIR}/default-flags"
+	if [[ -f "${df}" ]]; then
+		printf '\nDefault agent? [claude-code / qwen-code / opencode-ai / cursor]\n'
+		printf '(Press Enter to keep current default) '
+		local chosen_agent
+		read -r chosen_agent </dev/tty
+		if [[ -n "${chosen_agent}" ]]; then
+			case "${chosen_agent}" in
+			claude-code | qwen-code | opencode-ai | cursor)
+				sed -i "s|^--agent .*|--agent ${chosen_agent}|" "${df}"
+				printf 'Default agent set to %s\n' "${chosen_agent}"
+				;;
+			*)
+				printf 'Unknown agent "%s" — keeping current default\n' \
+					"${chosen_agent}" >&2
+				;;
+			esac
+		fi
+	fi
+
 	local rc_file
 	rc_file="$(detect_rc_file)"
 
@@ -110,10 +131,10 @@ function cmd_install() {
 
 	printf '\nInstalled to: %s\n' "${INSTALL_DIR}"
 	printf '\nCustomize your session by editing the config files:\n'
+	printf '  default-flags       — default flags prepended to every invocation\n'
 	printf '  auto_envs.conf      — host environment variables to forward into the container (one name per line)\n'
 	printf '  pre_start.sh        — shell script sourced inside the container before the agent starts\n'
 	printf '  default_mounts.conf — extra volume mounts (host:container[:ro], one per line)\n'
-	printf '  defaults.conf       — general settings like DEFAULT_AGENT\n'
 	printf '\nRestart your shell or run:\n'
 	printf '  source %s\n' "${rc_file}"
 }
