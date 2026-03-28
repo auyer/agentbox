@@ -3,6 +3,8 @@
 Run LLM coding agents in an isolated container, locked to a dedicated git
 worktree. Each session gets its own branch, its own container, and no access
 to the rest of your repository's git history.
+It can use your Containerfile/Dockerfile for dependencies, and automatically loads a .devcontainer config if available.
+
 
 ## Overview
 
@@ -140,6 +142,13 @@ persists after exit; on exit agentbox prints the exact command to reconnect:
 Use the printed `podman rm -f <name>` (or `docker rm -f <name>`) command to
 clean up the container when you no longer need it.
 
+    --no-devcontainer
+
+Disable automatic devcontainer.json detection. By default, when `--image` is
+not specified and a `.devcontainer/devcontainer.json` (or `.devcontainer.json`)
+is found in the project root, its image or Dockerfile is used automatically.
+See [**Devcontainer auto-detection**](#devcontainer-auto-detection) below.
+
     --image <image-ref|path>
 
 Use a user-provided container image as the base runtime environment instead of
@@ -223,6 +232,39 @@ The following variables are set inside the container:
 
 Additional variables are forwarded from the host via `auto_envs.conf` (see
 below).
+
+---
+
+## Devcontainer auto-detection
+
+When `--image` is not provided, agentbox checks for a devcontainer.json in
+the project root and uses its image configuration automatically.
+
+### Search paths (in priority order)
+
+1. `.devcontainer/devcontainer.json`
+2. `.devcontainer.json`
+3. `.devcontainer/<subdir>/devcontainer.json` (one level deep)
+
+### Supported configuration
+
+| devcontainer.json field | Behaviour |
+|-------------------------|-----------|
+| `"image": "<ref>"` | Image reference used directly (equivalent to `--image <ref>`) |
+| `"build.dockerfile"` + `"build.context"` | Dockerfile built with the given context; result used as base image |
+| `"dockerComposeFile"` | Not supported — auto-detection skipped |
+
+`build.context` defaults to the directory containing `devcontainer.json` if
+not specified. `build.args` entries are ignored; agentbox always passes
+`USER_ID` and `GROUP_ID` from the host.
+
+JSON parsing is done by running `jq` inside the agentbox base image, so no
+`jq` installation is required on the host.
+
+### Disabling
+
+Pass `--no-devcontainer` to skip detection entirely and use the agentbox
+built-in image, or pass `--image` to supply an explicit image instead.
 
 ---
 

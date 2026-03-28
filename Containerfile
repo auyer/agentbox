@@ -7,7 +7,8 @@ USER root
 RUN apt update && apt install -y \
 	git \
 	openssh-client \
-	curl
+	curl \
+	jq
 
 ENV HOME=/home/agentbox
 

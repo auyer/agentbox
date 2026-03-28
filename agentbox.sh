@@ -84,6 +84,11 @@ function usage() {
 	printf '                            The reconnect command is printed on\n'
 	printf '                            exit. By default containers are\n'
 	printf '                            removed automatically (--rm).\n'
+	printf '  --no-devcontainer         Skip automatic devcontainer.json\n'
+	printf '                            detection. By default, if no --image\n'
+	printf '                            is given and a devcontainer.json is\n'
+	printf '                            found, its image or Dockerfile is\n'
+	printf '                            used automatically.\n'
 	printf '  --image <image-ref>       Use a custom container image instead\n'
 	printf '                            of building from Containerfile.\n'
 	printf '                            Requires a glibc-based image with\n'
@@ -396,6 +401,74 @@ function detect_image_paths() {
 	printf '%s\n%s\n' "${home_dir}" "${workdir}"
 }
 
+# Search for a devcontainer.json under root and extract the image config.
+# Prints one of:
+#   image:<ref>                              — direct image field
+#   dockerfile:<abs_path> context:<abs_path> — build.dockerfile + build.context
+# Prints nothing when no spec is found or the config type is unsupported
+# (e.g. dockerComposeFile).  jq runs inside agentbox-image — no host dep.
+# Usage: find_devcontainer_image <search_root> <cmd>
+function find_devcontainer_image() {
+	local root="${1}"
+	local cmd="${2}"
+	local spec_file=''
+
+	# Search paths per devcontainer spec (in priority order)
+	local -a candidates=(
+		"${root}/.devcontainer/devcontainer.json"
+		"${root}/.devcontainer.json"
+	)
+	# One level deep subdirectories inside .devcontainer/
+	local subdir
+	for subdir in "${root}/.devcontainer"/*/; do
+		[[ -f "${subdir}devcontainer.json" ]] && \
+			candidates+=("${subdir}devcontainer.json")
+	done
+
+	local candidate
+	for candidate in "${candidates[@]}"; do
+		if [[ -f "${candidate}" ]]; then
+			spec_file="${candidate}"
+			break
+		fi
+	done
+	[[ -z "${spec_file}" ]] && return 0
+
+	local spec_dir
+	spec_dir="$(dirname "${spec_file}")"
+
+	# --- direct image field ---
+	local image_ref
+	image_ref="$(
+		run_cmd "${cmd}" run --rm -i agentbox-image \
+			jq -r '.image // empty' < "${spec_file}"
+	)"
+	if [[ -n "${image_ref}" ]]; then
+		printf 'image:%s' "${image_ref}"
+		return 0
+	fi
+
+	# --- build.dockerfile field ---
+	local dockerfile_rel
+	dockerfile_rel="$(
+		run_cmd "${cmd}" run --rm -i agentbox-image \
+			jq -r '.build.dockerfile // empty' < "${spec_file}"
+	)"
+	if [[ -n "${dockerfile_rel}" ]]; then
+		local ctx_rel abs_dockerfile abs_context
+		ctx_rel="$(
+			run_cmd "${cmd}" run --rm -i agentbox-image \
+				jq -r '.build.context // "."' < "${spec_file}"
+		)"
+		abs_dockerfile="$(realpath "${spec_dir}/${dockerfile_rel}")"
+		abs_context="$(realpath "${spec_dir}/${ctx_rel}")"
+		printf 'dockerfile:%s context:%s' "${abs_dockerfile}" "${abs_context}"
+		return 0
+	fi
+
+	# dockerComposeFile and other unsupported types: return nothing
+}
+
 # Run a one-shot installer container (agentbox-image) to populate the tool
 # cache.  Skipped when the expected CLI binary is already present on disk.
 # Usage: ensure_tool_cache <cmd> <agent_type> <cache_base>
@@ -455,6 +528,7 @@ function cmd_start() {
 	local refresh_cache=0
 	local privileged=0
 	local keep_container=0
+	local no_devcontainer=0
 	local custom_image=''
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_base cli_cmd
@@ -504,6 +578,10 @@ function cmd_start() {
 			;;
 		--keep-container)
 			keep_container=1
+			shift
+			;;
+		--no-devcontainer)
+			no_devcontainer=1
 			shift
 			;;
 		--image)
@@ -642,6 +720,38 @@ function cmd_start() {
 
 	local container_home='/home/agentbox'
 	local container_workdir='/home/agentbox/app'
+
+	# Auto-detect devcontainer image if --image was not explicitly provided.
+	if [[ -z "${custom_image}" ]] && [[ "${no_devcontainer}" -eq 0 ]]; then
+		local dc_search_root
+		if [[ "${no_git}" -eq 1 ]]; then
+			dc_search_root="${worktree_path}"
+		else
+			dc_search_root="${git_root}"
+		fi
+		local dc_result
+		dc_result="$(find_devcontainer_image "${dc_search_root}" "${cmd}")"
+		if [[ -n "${dc_result}" ]]; then
+			if [[ "${dc_result}" == image:* ]]; then
+				custom_image="${dc_result#image:}"
+				printf 'devcontainer: using image %s\n' "${custom_image}"
+			elif [[ "${dc_result}" == dockerfile:* ]]; then
+				local dc_rest dc_dockerfile dc_context
+				dc_rest="${dc_result#dockerfile:}"
+				dc_dockerfile="${dc_rest%% context:*}"
+				dc_context="${dc_rest#* context:}"
+				printf 'devcontainer: building from %s (context: %s)\n' \
+					"${dc_dockerfile}" "${dc_context}"
+				run_cmd "${cmd}" build \
+					--tag agentbox-devcontainer-image \
+					--build-arg "USER_ID=$(id --user)" \
+					--build-arg "GROUP_ID=$(id --group)" \
+					--file "${dc_dockerfile}" \
+					"${dc_context}"
+				custom_image='agentbox-devcontainer-image'
+			fi
+		fi
+	fi
 
 	if [[ -n "${custom_image}" ]]; then
 		# Step 1: build user-provided Containerfile into a named image.
