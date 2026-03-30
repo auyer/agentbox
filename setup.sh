@@ -105,6 +105,19 @@ function cmd_install() {
 		fi
 	fi
 
+	# Ask about auto-mounting SSH keys as read-only
+	local dm="${INSTALL_DIR}/default_mounts.conf"
+	if [[ -f "${dm}" ]]; then
+		printf '\nAuto mount SSH keys as read-only? [y/N] '
+		read -r answer </dev/tty
+		if [[ "${answer}" == "y" || "${answer}" == "Y" ]]; then
+			# Uncomment the SSH mount lines
+			sed -i 's|^# ~/.ssh/known_hosts:${CONTAINER_HOME}/.ssh/known_hosts:ro|~/.ssh/known_hosts:${CONTAINER_HOME}/.ssh/known_hosts:ro|' "${dm}"
+			sed -i 's|^# ~/.ssh/:${CONTAINER_HOME}/.ssh/:ro|~/.ssh/:${CONTAINER_HOME}/.ssh/:ro|' "${dm}"
+			printf 'SSH key mounts enabled in default_mounts.conf\n'
+		fi
+	fi
+
 	local rc_file
 	rc_file="$(detect_rc_file)"
 
