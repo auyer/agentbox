@@ -80,6 +80,13 @@ function usage() {
 	printf '  --privileged              Run the container in privileged mode\n'
 	printf '                            (enables Docker-in-Docker and full\n'
 	printf '                            device access; off by default)\n'
+	printf '  --mount-docker-socket     Mount the host docker/podman socket\n'
+	printf '                            into the container at\n'
+	printf '                            /var/run/docker.sock. Socket path\n'
+	printf '                            is resolved from DOCKER_HOST or\n'
+	printf '                            via context inspect. On podman,\n'
+	printf '                            --security-opt label=disable is\n'
+	printf '                            added automatically.\n'
 	printf '  --keep-container          Do not remove the container on exit.\n'
 	printf '                            The reconnect command is printed on\n'
 	printf '                            exit. By default containers are\n'
@@ -142,6 +149,45 @@ function detect_container_cmd() {
 	fi
 	printf 'ERROR: neither podman nor docker found in PATH\n' >&2
 	exit 1 # EPERM
+}
+
+# Resolve the host docker/podman socket path for --mount-docker-socket.
+# Priority: DOCKER_HOST env var → <cmd> context inspect → error.
+# Prints the resolved absolute socket path on stdout (no unix:// prefix).
+# Usage: resolve_docker_socket <cmd>
+function resolve_docker_socket() {
+	local cmd="${1}"
+	local socket_path=''
+
+	# Priority 1: DOCKER_HOST env var (set by Docker, Podman, and compatible tools)
+	if [[ -n "${DOCKER_HOST:-}" ]]; then
+		if [[ "${DOCKER_HOST}" == unix://* ]]; then
+			socket_path="${DOCKER_HOST#unix://}"
+		elif [[ "${DOCKER_HOST}" != *://* ]]; then
+			# Bare path with no URI scheme — use as-is
+			socket_path="${DOCKER_HOST}"
+		fi
+		# tcp:// and other non-socket schemes are silently skipped
+	fi
+
+	# Priority 2: probe via context inspect (works for both docker and podman)
+	if [[ -z "${socket_path}" ]]; then
+		socket_path="$(
+			"${cmd}" context inspect \
+				--format '{{(index .Endpoints "docker").Host}}' 2>/dev/null \
+				| sed 's|^unix://||'
+		)" || socket_path=''
+	fi
+
+	if [[ -z "${socket_path}" ]]; then
+		printf 'ERROR: --mount-docker-socket: cannot determine socket path.\n' >&2
+		printf '  Set DOCKER_HOST (e.g. DOCKER_HOST=unix:///run/user/%s/podman/podman.sock)\n' \
+			"$(id -u)" >&2
+		printf '  or ensure "%s context inspect" returns a valid endpoint.\n' "${cmd}" >&2
+		exit 1
+	fi
+
+	printf '%s' "${socket_path}"
 }
 
 function get_git_root() {
@@ -261,6 +307,7 @@ function build_run_args() {
 	local container_home="${8:-/home/agentbox}"
 	local container_workdir="${9:-/home/agentbox/app}"
 	local keep_container="${10:-0}"
+	local docker_socket_path="${11:-}"
 	local config_pair container_config_dir config_dir
 	local -a args
 
@@ -301,6 +348,31 @@ function build_run_args() {
 	fi
 	if [[ "${privileged}" -eq 1 ]]; then
 		args+=('--privileged')
+	fi
+
+	# Mount docker/podman socket when --mount-docker-socket is requested.
+	if [[ -n "${docker_socket_path}" ]]; then
+		if [[ "${cmd}" == 'podman' ]]; then
+			# :Z does per-container relabeling; label=disable allows cross-context
+			# socket access under SELinux (required for podman + SELinux setups).
+			args+=("--volume=${docker_socket_path}:/var/run/docker.sock:Z")
+			args+=('--security-opt' 'label=disable')
+		else
+			args+=("--volume=${docker_socket_path}:/var/run/docker.sock")
+		fi
+		# Add the socket file's GID as a supplementary group so the container
+		# user can access the socket without being root.  This works regardless
+		# of what the group is named on the host (docker, podman, root, etc.).
+		local socket_gid
+		socket_gid="$(stat -c '%g' "${docker_socket_path}" 2>/dev/null || true)"
+		if [[ -n "${socket_gid}" ]] && [[ "${socket_gid}" != '0' ]]; then
+			args+=("--group-add=${socket_gid}")
+		fi
+		# Forward DOCKER_HOST into the container when it was set on the host,
+		# so tooling inside the container uses the same socket path.
+		if [[ -n "${DOCKER_HOST:-}" ]]; then
+			args+=("--env=DOCKER_HOST=${DOCKER_HOST}")
+		fi
 	fi
 
 	args+=("--volume=${worktree_path}:${container_workdir}${selinux}")
@@ -527,6 +599,8 @@ function cmd_start() {
 	local no_git=0
 	local refresh_cache=0
 	local privileged=0
+	local mount_docker_socket=0
+	local docker_socket_path=''
 	local keep_container=0
 	local no_devcontainer=0
 	local custom_image=''
@@ -568,6 +642,10 @@ function cmd_start() {
 			;;
 		--privileged)
 			privileged=1
+			shift
+			;;
+		--mount-docker-socket)
+			mount_docker_socket=1
 			shift
 			;;
 		--keep-container)
@@ -650,6 +728,11 @@ function cmd_start() {
 	fi
 
 	cmd="$(detect_container_cmd)"
+
+	# Resolve docker socket path when --mount-docker-socket is requested.
+	if [[ "${mount_docker_socket}" -eq 1 ]]; then
+		docker_socket_path="$(resolve_docker_socket "${cmd}")"
+	fi
 
 	# Set globals for _on_exit trap
 	WORKTREE_PATH_HINT="${worktree_path}"
@@ -783,6 +866,14 @@ RUN mkdir -p /home/agentbox/.npm-global /home/agentbox/.local/bin \
              /home/agentbox/.cache /home/agentbox/.ssh \
              /home/agentbox/app \
     && chown -R ${USER_ID}:${GROUP_ID} /home/agentbox
+# Create user/group entry so Node.js os.userInfo() works under Docker's
+# --user=<uid>:<gid> (Docker does not inject /etc/passwd automatically).
+RUN getent group  ${GROUP_ID} >/dev/null 2>&1 \
+    || groupadd --gid ${GROUP_ID} agentbox 2>/dev/null || true; \
+    getent passwd ${USER_ID} >/dev/null 2>&1 \
+    || useradd --uid ${USER_ID} --gid ${GROUP_ID} \
+               --home-dir /home/agentbox --no-create-home \
+               --shell /bin/bash agentbox 2>/dev/null || true
 ENV HOME=/home/agentbox
 ENV NPM_CONFIG_PREFIX=/home/agentbox/.npm-global
 ENV PATH="/home/agentbox/.local/bin:/home/agentbox/.npm-global/bin:${PATH}"
@@ -818,7 +909,7 @@ DOCKERFILE
 			"${agent_type}" "${git_root:-}" \
 			"${privileged}" "${custom_image}" \
 			"${container_home}" "${container_workdir}" \
-			"${keep_container}"
+			"${keep_container}" "${docker_socket_path}"
 	)
 
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"

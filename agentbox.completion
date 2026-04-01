@@ -25,6 +25,7 @@ _agentbox_complete() {
     --mount
     --image
     --privileged
+    --mount-docker-socket
     --refresh-cache
     --help
     -h
@@ -110,6 +111,7 @@ if type compdef >/dev/null 2>&1; then
               '--no-git[Run without git, mount current directory]' \
               '--refresh-cache[Remove cached agent install and reinstall]' \
               '--privileged[Run container in privileged mode (enables Docker-in-Docker)]' \
+              '--mount-docker-socket[Mount host docker/podman socket into container at /var/run/docker.sock]' \
               '--image[Use custom container image or Containerfile (glibc+bash required)]:image or file:_files' \
               '*--mount[Mount host path into container]:mount spec:_files' \
               ':branch name:' \

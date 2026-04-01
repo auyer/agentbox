@@ -23,6 +23,9 @@
 # Run the container in privileged mode (required for Docker-in-Docker)
 # --privileged
 
+# Mount the host docker/podman socket into the container (lighter-weight than --privileged)
+# --mount-docker-socket
+
 # Stash uncommitted changes and apply them to the new worktree
 # --use-stash
 

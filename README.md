@@ -133,6 +133,31 @@ access to host devices and disables the default seccomp/AppArmor profiles,
 which is required for Docker-in-Docker (dind) workflows. Off by default — only
 use this when the agent session specifically needs to run a container daemon.
 
+    --mount-docker-socket
+
+Mount the host's docker or podman socket into the container at
+`/var/run/docker.sock`. Allows agents to run `docker`-compatible commands
+without full `--privileged` mode.
+
+The socket path is resolved automatically in this order:
+
+1. The `DOCKER_HOST` environment variable (`unix://` prefix stripped; TCP
+   addresses are skipped)
+2. `<runtime> context inspect` output
+3. Error — launch is aborted if neither yields a path
+
+On podman, `:Z` relabeling and `--security-opt label=disable` are added
+automatically to allow socket access under SELinux. On docker, only the
+volume mount is added.
+
+When `DOCKER_HOST` is set on the host it is also forwarded into the
+container so tooling inside uses the same socket configuration.
+
+Note: you might still need to install docker inside the container image.
+For example, in a custom `Containerfile` or devcontainer:
+
+    RUN apt install docker.io -y
+
     --keep-container
 
 Do not pass `--rm` to the container runtime. By default the container is
@@ -211,6 +236,7 @@ set as the container's working directory.
 | `<agentbox-dir>/workflows/`               | `/home/agentbox/app/workflows`  | If directory exists       |
 | `<agentbox-dir>/cache/<agent>/npm-global` | `/home/agentbox/.npm-global`    | Agent installs (`npm -g`) |
 | `<agentbox-dir>/cache/<agent>/local`      | `/home/agentbox/.local`         | e.g. curl-based CLIs      |
+| Host docker/podman socket                 | `/var/run/docker.sock`          | Only with `--mount-docker-socket` |
 
 The cache directories are created automatically. Each `--agent` value has its
 own cache so installs do not collide.
