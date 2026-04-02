@@ -46,23 +46,18 @@ the rc file.
 ## Usage
 
     agentbox [BRANCH] [OPTIONS]
-    agentbox start [BRANCH] [OPTIONS]   # backwards-compatible alias
-
-### Commands
-
-    agentbox [BRANCH] [OPTIONS]
     agentbox help
 
 ---
 
-### agentbox start
+### Starting a session
 
 Creates a git worktree on a new branch, builds the container image, and
 launches the agent inside the container. When `--no-git-worktree` is passed,
 no branch or worktree is created — the current directory is mounted into the
 container as-is.
 
-    agentbox start [BRANCH] [OPTIONS]
+    agentbox [BRANCH] [OPTIONS]
 
 **BRANCH**
 
@@ -302,8 +297,8 @@ The `--image` flag lets you bring your own container image as the runtime
 environment. agentbox layers the agentbox environment on top of it so the
 agent CLI works regardless of what the base image contains.
 
-    agentbox start --image rust:bookworm --agent claude-code
-    agentbox start --image ./MyDockerfile --agent qwen-code
+    agentbox --image rust:bookworm --agent claude-code
+    agentbox --image ./MyDockerfile --agent qwen-code
 
 ### How it works
 
@@ -476,7 +471,7 @@ container is started.
 
 ## Startup sequence
 
-When `agentbox start` is invoked the following steps occur in order:
+When `agentbox` is invoked the following steps occur in order:
 
 1. Verify the current directory is inside a git repository (skipped with `--no-git-worktree`).
 2. If a container with the computed name already exists and is running, attach to it and exit.

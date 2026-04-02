@@ -3,14 +3,13 @@
 
 _agentbox_complete() {
   local cur prev words cword
-  local -a cmds opts agent_types
+  local -a opts agent_types
 
   # Initialize completion for bash
   if type _init_completion >/dev/null 2>&1; then
     _init_completion || return
   fi
 
-  cmds=(start stop resume help)
   opts=(
     -v
     --verbose
@@ -21,57 +20,38 @@ _agentbox_complete() {
     --agent
     --no-autostart
     --dangerously-skip-permissions
-    --no-git
+    --no-git-worktree
     --mount
     --image
     --privileged
     --mount-docker-socket
     --refresh-cache
+    --keep-container
+    --no-devcontainer
     --help
     -h
   )
   agent_types=(claude-code qwen-code opencode-ai cursor)
 
-  # Determine current command context
-  if [[ ${cword} -eq 1 ]]; then
-    # Completing the first argument (subcommand)
-    COMPREPLY=($(compgen -W "${cmds[*]}" -- "${cur}"))
-    return
+  # Completing options or branch name
+  if [[ "${cur}" == -* ]]; then
+    # Completing options
+    COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
+  elif [[ "${prev}" == "--agent" || "${prev}" == "-a" ]]; then
+    # Completing agent type
+    COMPREPLY=($(compgen -W "${agent_types[*]}" -- "${cur}"))
+  elif [[ "${prev}" == "--image" ]]; then
+    # Offer file paths (Containerfile/Dockerfile) as completions
+    COMPREPLY=($(compgen -f -- "${cur}"))
+    compopt -o filenames 2>/dev/null
+  elif [[ "${prev}" == "--mount" ]]; then
+    # Completing mount spec — offer file/directory path completion
+    COMPREPLY=($(compgen -f -- "${cur}"))
+    compopt -o filenames 2>/dev/null
+  else
+    # Completing branch name or options
+    COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
   fi
-
-  # Check if we're after a subcommand
-  local subcommand="${words[1]}"
-
-  case "${subcommand}" in
-    start)
-      if [[ "${prev}" == "--agent" || "${prev}" == "-a" ]]; then
-        # Completing agent type
-        COMPREPLY=($(compgen -W "${agent_types[*]}" -- "${cur}"))
-      elif [[ "${prev}" == "--image" ]]; then
-        # Offer file paths (Containerfile/Dockerfile) as completions
-        COMPREPLY=($(compgen -f -- "${cur}"))
-        compopt -o filenames 2>/dev/null
-      elif [[ "${prev}" == "--mount" ]]; then
-        # Completing mount spec — offer file/directory path completion
-        COMPREPLY=($(compgen -f -- "${cur}"))
-        compopt -o filenames 2>/dev/null
-      elif [[ "${cur}" == -* ]]; then
-        # Completing options
-        COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
-      else
-        # Completing branch name or options
-        COMPREPLY=($(compgen -W "${opts[*]}" -- "${cur}"))
-      fi
-      ;;
-    stop|resume|help)
-      # No additional arguments for these commands
-      COMPREPLY=()
-      ;;
-    *)
-      # Unknown subcommand, suggest options and commands
-      COMPREPLY=($(compgen -W "${cmds[*]} ${opts[*]}" -- "${cur}"))
-      ;;
-  esac
 }
 
 # Bash completion
@@ -84,42 +64,27 @@ if type compdef >/dev/null 2>&1; then
   _agentbox_zsh() {
     local context state state_descr line
     typeset -A opt_args
-    local -a cmds agent_types
+    local -a agent_types
 
-    cmds=('start:Start a new agent session' 'stop:Stop the current session' 'resume:Resume a running session' 'help:Show help')
     agent_types=(claude-code qwen-code opencode-ai cursor)
 
-    _arguments -C \
+    _arguments \
       '(-v --verbose)'{-v,--verbose}'[Verbose output]' \
       '--docker[Use docker even if podman is available]' \
-      '1: :->command' \
-      '*: :->args' \
+      '(-s --use-stash)'{-s,--use-stash}'[Stash current changes and apply to new worktree]' \
+      '(-a --agent)'{-a,--agent}'[Agent type]:agent type:('"${agent_types[*]}"')' \
+      '--no-autostart[Do not launch the agent CLI automatically]' \
+      '--dangerously-skip-permissions[Run agent in yolo mode]' \
+      '--no-git-worktree[Run without git, mount current directory]' \
+      '--refresh-cache[Remove cached agent install and reinstall]' \
+      '--privileged[Run container in privileged mode (enables Docker-in-Docker)]' \
+      '--mount-docker-socket[Mount host docker/podman socket into container at /var/run/docker.sock]' \
+      '--keep-container[Do not remove the container on exit]' \
+      '--no-devcontainer[Skip automatic devcontainer.json detection]' \
+      '--image[Use custom container image or Containerfile (glibc+bash required)]:image or file:_files' \
+      '*--mount[Mount host path into container]:mount spec:_files' \
+      ':branch name:' \
       && return
-
-    case $state in
-      command)
-        _describe 'commands' cmds
-        ;;
-      args)
-        case $line[1] in
-          start)
-            _arguments \
-              '(-s --use-stash)'{-s,--use-stash}'[Stash current changes and apply to new worktree]' \
-              '(-a --agent)'{-a,--agent}'[Agent type]:agent type:('"${agent_types[*]}"')' \
-              '--no-autostart[Do not launch the agent CLI automatically]' \
-              '--dangerously-skip-permissions[Run agent in yolo mode]' \
-              '--no-git[Run without git, mount current directory]' \
-              '--refresh-cache[Remove cached agent install and reinstall]' \
-              '--privileged[Run container in privileged mode (enables Docker-in-Docker)]' \
-              '--mount-docker-socket[Mount host docker/podman socket into container at /var/run/docker.sock]' \
-              '--image[Use custom container image or Containerfile (glibc+bash required)]:image or file:_files' \
-              '*--mount[Mount host path into container]:mount spec:_files' \
-              ':branch name:' \
-              && return
-            ;;
-        esac
-        ;;
-    esac
   }
   compdef _agentbox_zsh agentbox
 fi

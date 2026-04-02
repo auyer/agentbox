@@ -49,11 +49,10 @@ declare -A AGENT_CLI_CMDS=(
 
 function usage() {
 	printf 'Usage: agentbox [BRANCH] [OPTIONS]\n'
-	printf '       agentbox start [BRANCH] [OPTIONS]\n'
 	printf '\n'
 	printf 'Commands:\n'
-	printf '  start [BRANCH] [OPTIONS]  Start a new agent session (default)\n'
-	printf '  help                      Show this help message\n'
+	printf '  [BRANCH] [OPTIONS]  Start a new agent session\n'
+	printf '  help                Show this help message\n'
 	printf '\n'
 	printf 'Options:\n'
 	printf '  BRANCH                    Branch name'
@@ -1009,19 +1008,13 @@ fi
 unset _arg _filtered
 
 # --- dispatch ---
-# "agentbox [ARGS...]" is equivalent to "agentbox start [ARGS...]".
-# "start" is kept as an explicit alias for backwards compatibility.
+# All invocations directly start a session: `agentbox [BRANCH] [OPTIONS]`.
 case "${1:-}" in
-start)
-	shift
-	cmd_start "$@"
-	;;
 help | --help | -h)
 	usage
 	;;
 *)
-	# No subcommand given, or first arg is a branch name / option:
-	# forward everything directly to cmd_start.
+	# No subcommand given — forward everything directly to cmd_start.
 	cmd_start "$@"
 	;;
 esac
