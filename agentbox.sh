@@ -852,13 +852,31 @@ function cmd_start() {
 		if ! image_has_node "${cmd}" "${user_image_ref}"; then
 			printf 'User image lacks node — copying from agentbox-image\n'
 			cat >>"${wrapper}" <<'DOCKERFILE'
+# Copy Node.js runtime from agentbox-image
 COPY --from=agentbox-image /usr/local/bin/node /usr/local/bin/
 COPY --from=agentbox-image /usr/local/bin/npm  /usr/local/bin/
 COPY --from=agentbox-image /usr/local/bin/npx  /usr/local/bin/
 COPY --from=agentbox-image /usr/local/lib/node_modules /usr/local/lib/node_modules/
+# Copy shared libraries required by Node.js (glibc and dependencies)
+COPY --from=agentbox-image /lib64/ld-linux-x86-64.so.2 /lib64/
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libdl.so.2 /lib/x86_64-linux-gnu/
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/librt.so.1 /lib/x86_64-linux-gnu/
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libpthread.so.0 /lib/x86_64-linux-gnu/
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libm.so.6 /lib/x86_64-linux-gnu/
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libgcc_s.so.1 /lib/x86_64-linux-gnu/
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/
 DOCKERFILE
 		fi
+		# Ensure bash and base64 are available for pre_start.sh and launch
+		# Copy from agentbox-image to work regardless of user image's package manager
 		cat >>"${wrapper}" <<'DOCKERFILE'
+# Copy bash and base64 from agentbox-image (required for pre_start.sh and launch)
+COPY --from=agentbox-image /bin/bash /bin/bash
+COPY --from=agentbox-image /bin/sh /bin/sh
+COPY --from=agentbox-image /usr/bin/base64 /usr/bin/base64
+# Copy shared libraries required by bash and base64
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libtinfo.so.6 /lib/x86_64-linux-gnu/ 2>/dev/null || true
+COPY --from=agentbox-image /lib/x86_64-linux-gnu/libselinux.so.1 /lib/x86_64-linux-gnu/ 2>/dev/null || true
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 RUN mkdir -p /home/agentbox/.npm-global /home/agentbox/.local/bin \
