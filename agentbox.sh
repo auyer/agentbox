@@ -346,7 +346,7 @@ function build_run_args() {
 	# namespace and is required alongside --user for correct
 	# volume ownership. :z relabels volumes for SELinux (podman only).
 	local selinux=''
-	args+=("--user=$(id --user):$(id --group)")
+	args+=("--user=$(id -u):$(id -g)")
 	if [[ "${cmd}" == 'podman' ]]; then
 		args+=('--userns=keep-id')
 		selinux=':z'
@@ -869,8 +869,8 @@ function cmd_start() {
 					"${dc_dockerfile}" "${dc_context}"
 				run_cmd "${cmd}" build \
 					--tag agentbox-devcontainer-image \
-					--build-arg "USER_ID=$(id --user)" \
-					--build-arg "GROUP_ID=$(id --group)" \
+					--build-arg "USER_ID=$(id -u)" \
+					--build-arg "GROUP_ID=$(id -g)" \
 					--file "${dc_dockerfile}" \
 					"${dc_context}"
 				custom_image='agentbox-devcontainer-image'
@@ -992,8 +992,8 @@ DOCKERFILE
 		printf 'Building runtime image (agentbox environment on top of user image)...\n'
 		run_cmd "${cmd}" build \
 			--tag agentbox-user-image \
-			--build-arg "USER_ID=$(id --user)" \
-			--build-arg "GROUP_ID=$(id --group)" \
+			--build-arg "USER_ID=$(id -u)" \
+			--build-arg "GROUP_ID=$(id -g)" \
 			--file "${wrapper}" \
 			"${tmp_ctx}"
 		rm -rf "${tmp_ctx}"
