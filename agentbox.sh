@@ -439,13 +439,37 @@ function build_run_args() {
 	printf '%s\n' "${args[@]}"
 }
 
+# Return 0 if the given image has the command in PATH, non-zero otherwise.
+# Usage: image_has_command <cmd> <image_ref> <command>
+function image_has_command() {
+	local cmd="${1}"
+	local image_ref="${2}"
+	local command="${3}"
+	run_cmd "${cmd}" run --rm "${image_ref}" \
+		sh -c "command -v ${command} >/dev/null 2>&1"
+}
+
 # Return 0 if the given image has node in PATH, non-zero otherwise.
 # Usage: image_has_node <cmd> <image_ref>
 function image_has_node() {
-	local cmd="${1}"
-	local image_ref="${2}"
-	run_cmd "${cmd}" run --rm "${image_ref}" \
-		node --version >/dev/null 2>&1
+	image_has_command "${1}" "${2}" node
+}
+
+# Detect the package manager in the image. Prints the binary name or empty.
+# Usage: detect_package_manager <cmd> <image_ref>
+function detect_package_manager() {
+	local cmd="${1}" image_ref="${2}"
+	if image_has_command "${cmd}" "${image_ref}" apt-get; then
+		printf 'apt-get'
+	elif image_has_command "${cmd}" "${image_ref}" dnf; then
+		printf 'dnf'
+	elif image_has_command "${cmd}" "${image_ref}" yum; then
+		printf 'yum'
+	elif image_has_command "${cmd}" "${image_ref}" apk; then
+		printf 'apk'
+	else
+		printf ''
+	fi
 }
 
 # Detect the home directory and working directory configured in a container
@@ -868,40 +892,84 @@ function cmd_start() {
 
 		# Step 2: build a thin wrapper image that layers the agentbox
 		# environment (/home/agentbox, npm prefix, PATH) on top of the
-		# user's image.  If the user's image lacks node we also COPY the
-		# node runtime from agentbox-image so the agent CLI works.
+		# user's image.  Detect what's missing and install it using the
+		# image's native package manager.
 		local tmp_ctx
 		tmp_ctx="$(mktemp -d)"
 		local wrapper="${tmp_ctx}/Containerfile"
 		printf 'FROM %s\n' "${user_image_ref}" >"${wrapper}"
-		if ! image_has_node "${cmd}" "${user_image_ref}"; then
-			printf 'User image lacks node — copying from agentbox-image\n'
-			cat >>"${wrapper}" <<'DOCKERFILE'
-# Copy Node.js runtime from agentbox-image
-COPY --from=agentbox-image /usr/local/bin/node /usr/local/bin/
-COPY --from=agentbox-image /usr/local/bin/npm  /usr/local/bin/
-COPY --from=agentbox-image /usr/local/bin/npx  /usr/local/bin/
-COPY --from=agentbox-image /usr/local/lib/node_modules /usr/local/lib/node_modules/
-# Copy shared libraries required by Node.js (glibc and dependencies)
-COPY --from=agentbox-image /lib64/ld-linux-x86-64.so.2 /lib64/
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libdl.so.2 /lib/x86_64-linux-gnu/
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/librt.so.1 /lib/x86_64-linux-gnu/
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libpthread.so.0 /lib/x86_64-linux-gnu/
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libm.so.6 /lib/x86_64-linux-gnu/
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libgcc_s.so.1 /lib/x86_64-linux-gnu/
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libc.so.6 /lib/x86_64-linux-gnu/
+
+		# Detect missing tools and available package manager
+		local has_node has_bash has_base64 pkg_mgr
+		has_node=0; image_has_node "${cmd}" "${user_image_ref}" && has_node=1
+		has_bash=0; image_has_command "${cmd}" "${user_image_ref}" bash && has_bash=1
+		has_base64=0; image_has_command "${cmd}" "${user_image_ref}" base64 && has_base64=1
+		pkg_mgr="$(detect_package_manager "${cmd}" "${user_image_ref}")"
+
+		# Build install command if anything is missing
+		local missing_items=()
+		[[ "${has_node}" -eq 0 ]] && missing_items+=('node')
+		[[ "${has_bash}" -eq 0 ]] && missing_items+=('bash')
+		[[ "${has_base64}" -eq 0 ]] && missing_items+=('base64')
+
+		if [[ ${#missing_items[@]} -gt 0 ]]; then
+			if [[ -n "${pkg_mgr}" ]]; then
+				printf 'User image lacks: %s — installing via %s\n' \
+					"${missing_items[*]}" "${pkg_mgr}"
+
+				# Map missing items to package names per package manager
+				local install_cmd=''
+				case "${pkg_mgr}" in
+				apt-get)
+					local pkgs=()
+					[[ "${has_node}" -eq 0 ]] && pkgs+=('nodejs' 'npm')
+					[[ "${has_bash}" -eq 0 ]] && pkgs+=('bash')
+					[[ "${has_base64}" -eq 0 ]] && pkgs+=('coreutils')
+					install_cmd="apt-get update && apt-get install -y --no-install-recommends ${pkgs[*]} && rm -rf /var/lib/apt/lists/*"
+					;;
+				dnf)
+					local pkgs=()
+					[[ "${has_node}" -eq 0 ]] && pkgs+=('nodejs' 'npm')
+					[[ "${has_bash}" -eq 0 ]] && pkgs+=('bash')
+					[[ "${has_base64}" -eq 0 ]] && pkgs+=('coreutils')
+					install_cmd="dnf install -y ${pkgs[*]} && dnf clean all"
+					;;
+				yum)
+					local pkgs=()
+					[[ "${has_node}" -eq 0 ]] && pkgs+=('nodejs' 'npm')
+					[[ "${has_bash}" -eq 0 ]] && pkgs+=('bash')
+					[[ "${has_base64}" -eq 0 ]] && pkgs+=('coreutils')
+					install_cmd="yum install -y ${pkgs[*]} && yum clean all"
+					;;
+				apk)
+					local pkgs=()
+					[[ "${has_node}" -eq 0 ]] && pkgs+=('nodejs' 'npm')
+					[[ "${has_bash}" -eq 0 ]] && pkgs+=('bash')
+					[[ "${has_base64}" -eq 0 ]] && pkgs+=('coreutils')
+					install_cmd="apk add --no-cache ${pkgs[*]}"
+					;;
+				esac
+
+				if [[ -n "${install_cmd}" ]]; then
+					cat >>"${wrapper}" <<DOCKERFILE
+RUN ${install_cmd}
 DOCKERFILE
+				fi
+			else
+				# No known package manager — cannot proceed
+				printf 'ERROR: user image lacks %s and no supported package manager detected.\n' \
+					"${missing_items[*]}" >&2
+				printf 'Supported package managers: apt-get, dnf, yum, apk.\n' >&2
+				printf 'If your image uses a different package manager (e.g. nix), install node,\n' >&2
+				printf 'bash, and coreutils in your own Containerfile before using --image.\n' >&2
+				printf 'Alternatively, pass --no-devcontainer to use the agentbox built-in image.\n' >&2
+				rm -rf "${tmp_ctx}"
+				return 1
+			fi
 		fi
-		# Ensure bash and base64 are available for pre_start.sh and launch
-		# Copy from agentbox-image to work regardless of user image's package manager
+
+		# Ensure /bin/sh exists as fallback (most images have it)
 		cat >>"${wrapper}" <<'DOCKERFILE'
-# Copy bash and base64 from agentbox-image (required for pre_start.sh and launch)
-COPY --from=agentbox-image /bin/bash /bin/bash
-COPY --from=agentbox-image /bin/sh /bin/sh
-COPY --from=agentbox-image /usr/bin/base64 /usr/bin/base64
-# Copy shared libraries required by bash and base64
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libtinfo.so.6 /lib/x86_64-linux-gnu/ 2>/dev/null || true
-COPY --from=agentbox-image /lib/x86_64-linux-gnu/libselinux.so.1 /lib/x86_64-linux-gnu/ 2>/dev/null || true
 ARG USER_ID=1000
 ARG GROUP_ID=1000
 RUN mkdir -p /home/agentbox/.npm-global /home/agentbox/.local/bin \
@@ -995,15 +1063,45 @@ DOCKERFILE
 	fi
 	printf 'Runtime image:  %s\n' "${runtime_image}"
 	printf 'Launch command: %s\n' "${launch_cmd}"
+
+	# Detect which shell to use for the -c wrapper: prefer bash, fall back to sh
+	local shell_cmd='/bin/bash'
+	if [[ -n "${custom_image}" ]]; then
+		if ! image_has_command "${cmd}" "${runtime_image}" bash; then
+			if image_has_command "${cmd}" "${runtime_image}" sh; then
+				printf 'WARNING: bash not found in runtime image, falling back to sh\n' >&2
+				printf 'pre_start.sh will be skipped (requires bash).\n' >&2
+				shell_cmd='/bin/sh'
+				custom_cfg_cmd=''
+				# Update launch_cmd to use sh for --no-autostart
+				if [[ "${autostart}" -eq 0 ]]; then
+					launch_cmd='exec sh'
+				fi
+			else
+				printf 'ERROR: neither bash nor sh found in runtime image\n' >&2
+				exit 1
+			fi
+		fi
+	else
+		# agentbox-image always has bash, but double-check
+		if ! image_has_command "${cmd}" "${runtime_image}" bash; then
+			shell_cmd='/bin/sh'
+			custom_cfg_cmd=''
+			if [[ "${autostart}" -eq 0 ]]; then
+				launch_cmd='exec sh'
+			fi
+		fi
+	fi
+
 	printf 'Starting agent container...\n'
 	if [[ -n "${custom_image}" ]]; then
 		# Cache already populated by ensure_tool_cache; skip install step.
 		# mkdir -p /home/agentbox ensures the mount-point base exists in the
 		# user's image before volumes are overlaid.
-		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" /bin/bash -c \
+		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" "${shell_cmd}" -c \
 			"mkdir -p /home/agentbox ${container_workdir}; ${custom_cfg_cmd}${launch_cmd}"
 	else
-		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" /bin/bash -c \
+		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" "${shell_cmd}" -c \
 			"${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}"
 	fi
 }
