@@ -185,6 +185,14 @@ specified multiple times.
 Variables `${CONTAINER_HOME}`, `${CONTAINER_WORKDIR}`, `${HOME}`, and
 `${AGENT_DIR}` are expanded in both paths.
 
+    --block-folder <path>
+
+Hide a directory from the agent by mounting an empty volume over it. Paths
+starting with `./` are interpreted as relative to the project workdir. Can be
+specified multiple times. Useful for hiding sensitive directories like
+credentials, internal tooling configs, or anything else the agent should not
+see.
+
     --docker
 
 Force the use of `docker` even when `podman` is available.

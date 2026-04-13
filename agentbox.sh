@@ -5,6 +5,7 @@ AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERBOSE=0
 FORCE_DOCKER=0
 declare -a EXTRA_MOUNTS=()
+declare -a BLOCK_FOLDERS=()
 
 # Globals set by cmd_start; read by _on_exit trap
 WORKTREE_PATH_HINT=''
@@ -74,6 +75,11 @@ function usage() {
 	printf '                            Container path starting with ./ is\n'
 	printf '                            relative to the container workdir.\n'
 	printf '                            Can be specified multiple times.\n'
+	printf '  --block-folder <path>      Hide a directory from the agent by\n'
+	printf '                            mounting an empty volume over it.\n'
+	printf '                            Paths starting with ./ are relative\n'
+	printf '                            to the workdir. Can be specified\n'
+	printf '                            multiple times.\n'
 	printf '  --refresh-cache           Remove cached agent install for this\n'
 	printf '                            agent type, then reinstall on start\n'
 	printf '  --privileged              Run the container in privileged mode\n'
@@ -398,6 +404,17 @@ function build_run_args() {
 		[[ -n "${mount_spec}" ]] && args+=("${mount_spec}")
 	done
 
+	# Blocked folders — mount empty tmpfs volumes to hide directories
+	# from the agent. Paths starting with ./ are resolved relative to
+	# the container workdir; absolute paths are used as-is.
+	local blocked_path
+	for blocked_path in "${BLOCK_FOLDERS[@]+"${BLOCK_FOLDERS[@]}"}"; do
+		if [[ "${blocked_path}" == './'* ]]; then
+			blocked_path="${container_workdir}/${blocked_path:2}"
+		fi
+		args+=("--volume=:${blocked_path}")
+	done
+
 	# Forward TERMINFO from host if set, mounting the path for terminal support.
 	if [[ -n "${TERMINFO:-}" ]]; then
 		args+=("--env=TERMINFO=${TERMINFO}")
@@ -669,6 +686,14 @@ function cmd_start() {
 			;;
 		--mount=*)
 			EXTRA_MOUNTS+=("${1#--mount=}")
+			shift
+			;;
+		--block-folder)
+			BLOCK_FOLDERS+=("${2}")
+			shift 2
+			;;
+		--block-folder=*)
+			BLOCK_FOLDERS+=("${1#--block-folder=}")
 			shift
 			;;
 		-*)

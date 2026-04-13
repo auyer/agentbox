@@ -22,6 +22,7 @@ _agentbox_complete() {
     --dangerously-skip-permissions
     --no-git-worktree
     --mount
+    --block-folder
     --image
     --privileged
     --mount-docker-socket
@@ -47,6 +48,10 @@ _agentbox_complete() {
   elif [[ "${prev}" == "--mount" ]]; then
     # Completing mount spec — offer file/directory path completion
     COMPREPLY=($(compgen -f -- "${cur}"))
+    compopt -o filenames 2>/dev/null
+  elif [[ "${prev}" == "--block-folder" ]]; then
+    # Completing blocked folder — offer directory path completion
+    COMPREPLY=($(compgen -d -- "${cur}"))
     compopt -o filenames 2>/dev/null
   else
     # Completing branch name or options
@@ -83,6 +88,7 @@ if type compdef >/dev/null 2>&1; then
       '--no-devcontainer[Skip automatic devcontainer.json detection]' \
       '--image[Use custom container image or Containerfile (glibc+bash required)]:image or file:_files' \
       '*--mount[Mount host path into container]:mount spec:_files' \
+      '*--block-folder[Hide a directory from the agent]:folder:_directories' \
       ':branch name:' \
       && return
   }

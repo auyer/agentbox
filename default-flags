@@ -43,3 +43,6 @@
 
 # Always mount an extra host path into every container
 # --mount ~/notes:/home/agentbox/notes
+
+# Always hide a directory from the agent by mounting an empty volume over it
+# --block-folder ./secrets
