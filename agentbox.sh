@@ -753,7 +753,7 @@ function cmd_start() {
 	fi
 
 	if [[ -z "${branch_name}" ]]; then
-		branch_name="agentbox-$(date --iso-8601)"
+		branch_name="agentbox-$(date "+%Y-%m-%d")"
 	fi
 
 	# Sanitize branch name: replace slashes with dashes
