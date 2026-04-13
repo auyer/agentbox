@@ -838,8 +838,8 @@ function cmd_start() {
 	printf 'Building container image...\n'
 	run_cmd "${cmd}" build \
 		--tag agentbox-image \
-		--build-arg "USER_ID=$(id --user)" \
-		--build-arg "GROUP_ID=$(id --group)" \
+		--build-arg "USER_ID=$(id -u)" \
+		--build-arg "GROUP_ID=$(id -g)" \
 		--file "${AGENT_DIR}/Containerfile" \
 		"${AGENT_DIR}"
 
