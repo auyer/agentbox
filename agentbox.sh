@@ -48,6 +48,26 @@ declare -A AGENT_CLI_CMDS=(
 	['cursor']='cursor-agent'
 )
 
+# Compatibility helper: realpath works on Linux but not macOS
+# Try realpath, then readlink -f, then perl fallback
+function _realpath_compat() {
+	if command -v realpath &>/dev/null; then
+		realpath "$@"
+	elif [[ "$(uname)" == "Darwin" ]]; then
+		perl -e "use Cwd; print Cwd::realpath(shift)" "$1"
+	else
+		readlink -f "$@"
+	fi
+}
+
+# Compatibility helper: base64 encoding with proper options for macOS and Linux
+function _base64_encode() {
+	local file="$1"
+	# Try Linux syntax first (-w 0), fallback to macOS syntax (-b 0)
+	base64 -w 0 < "${file}" 2>/dev/null || base64 -b 0 -i "${file}"
+}
+
+
 function usage() {
 	printf 'Usage: agentbox [BRANCH] [OPTIONS]\n'
 	printf '\n'
@@ -369,7 +389,7 @@ function build_run_args() {
 		# user can access the socket without being root.  This works regardless
 		# of what the group is named on the host (docker, podman, root, etc.).
 		local socket_gid
-		socket_gid="$(stat -c '%g' "${docker_socket_path}" 2>/dev/null || true)"
+		socket_gid="$(stat -f '%Xg' "${docker_socket_path}" 2>/dev/null || stat -c '%g' "${docker_socket_path}" 2>/dev/null || true)"
 		if [[ -n "${socket_gid}" ]] && [[ "${socket_gid}" != '0' ]]; then
 			args+=("--group-add=${socket_gid}")
 		fi
@@ -572,8 +592,8 @@ function find_devcontainer_image() {
 			run_cmd "${cmd}" run --rm -i agentbox-image \
 				jq -r '.build.context // "."' < "${spec_file}"
 		)"
-		abs_dockerfile="$(realpath "${spec_dir}/${dockerfile_rel}")"
-		abs_context="$(realpath "${spec_dir}/${ctx_rel}")"
+		abs_dockerfile="$(_realpath_compat "${spec_dir}/${dockerfile_rel}")"
+		abs_context="$(_realpath_compat "${spec_dir}/${ctx_rel}")"
 		printf 'dockerfile:%s context:%s' "${abs_dockerfile}" "${abs_context}"
 		return 0
 	fi
@@ -886,7 +906,7 @@ function cmd_start() {
 			run_cmd "${cmd}" build \
 				--tag agentbox-user-image \
 				--file "${custom_image}" \
-				"$(dirname "$(realpath "${custom_image}")")"
+				"$(dirname "$(_realpath_compat "${custom_image}")")"
 			user_image_ref='agentbox-user-image'
 		fi
 
@@ -1047,8 +1067,8 @@ DOCKERFILE
 	local custom_cfg_cmd=''
 	if [[ -f "${AGENT_DIR}/pre_start.sh" ]]; then
 		local encoded
-		encoded="$(base64 --wrap=0 "${AGENT_DIR}/pre_start.sh")"
-		custom_cfg_cmd="source <(echo '${encoded}' | base64 --decode) || true; set +e; "
+		encoded="$(_base64_encode "${AGENT_DIR}/pre_start.sh")"
+		custom_cfg_cmd="source <(echo '${encoded}' | base64 -d 2>/dev/null || base64 -D) || true; set +e; "
 	fi
 
 	# Skip install if the CLI is already present in the persisted cache.
