@@ -398,8 +398,9 @@ function build_run_args() {
 		# user can access the socket without being root.  This works regardless
 		# of what the group is named on the host (docker, podman, root, etc.).
 		local socket_gid
-		socket_gid="$(stat -f '%Xg' "${docker_socket_path}" 2>/dev/null || stat -c '%g' "${docker_socket_path}" 2>/dev/null || true)"
-		if [[ -n "${socket_gid}" ]] && [[ "${socket_gid}" != '0' ]]; then
+		socket_gid="$(stat -f '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]' || stat -c '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]' || true)"
+		# Only add if it's a non-zero numeric value
+		if [[ -n "${socket_gid}" ]] && [[ "${socket_gid}" =~ ^[0-9]+$ ]] && [[ "${socket_gid}" != '0' ]]; then
 			args+=("--group-add=${socket_gid}")
 		fi
 		# Forward DOCKER_HOST into the container when it was set on the host,
@@ -797,8 +798,23 @@ function cmd_start() {
 		branch_name="agentbox-$(date "+%Y-%m-%d")"
 	fi
 
-	# Sanitize branch name: replace slashes with dashes
+	# Sanitize branch name: replace slashes and whitespace with dashes,
+	# then replace any other characters not allowed in Docker container names
 	local sanitized_branch="${branch_name//\//-}"
+	sanitized_branch="${sanitized_branch//[[:space:]]/-}"
+	# Docker container names only allow [a-zA-Z0-9][a-zA-Z0-9_.-]
+	sanitized_branch="${sanitized_branch//[^a-zA-Z0-9._-]/-}"
+	# Ensure we don't have consecutive dashes (optional, but clean)
+	while [[ "${sanitized_branch}" == *--* ]]; do
+		sanitized_branch="${sanitized_branch//--/-}"
+	done
+	# Remove leading/trailing dashes
+	sanitized_branch="${sanitized_branch/#-/}"
+	sanitized_branch="${sanitized_branch/%-/}"
+	# Ensure sanitized branch is not empty
+	if [[ -z "${sanitized_branch}" ]]; then
+		sanitized_branch='default'
+	fi
 
 	if [[ "${no_git}" -eq 1 ]]; then
 		worktree_path="$(pwd)"
@@ -806,6 +822,14 @@ function cmd_start() {
 		# Use current directory name to make container name unique per project
 		local project_name
 		project_name="$(basename "$(pwd)")"
+		# Sanitize project name for container name
+		project_name="${project_name//[[:space:]]/-}"
+		project_name="${project_name//[^a-zA-Z0-9._-]/-}"
+		while [[ "${project_name}" == *--* ]]; do
+			project_name="${project_name//--/-}"
+		done
+		project_name="${project_name/#-/}"
+		project_name="${project_name/%-/}"
 		container_name="agentbox-${project_name}-${sanitized_branch}"
 		if [[ "${container_name}" =~ [[:space:]] ]]; then
 			printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
@@ -817,6 +841,14 @@ function cmd_start() {
 		# Use git root directory name to make container name unique per project
 		local project_name
 		project_name="$(basename "${git_root}")"
+		# Sanitize project name for container name
+		project_name="${project_name//[[:space:]]/-}"
+		project_name="${project_name//[^a-zA-Z0-9._-]/-}"
+		while [[ "${project_name}" == *--* ]]; do
+			project_name="${project_name//--/-}"
+		done
+		project_name="${project_name/#-/}"
+		project_name="${project_name/%-/}"
 		container_name="agentbox-${project_name}-${sanitized_branch}"
 		if [[ "${container_name}" =~ [[:space:]] ]]; then
 			printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
@@ -1080,6 +1112,19 @@ DOCKERFILE
 			"${keep_container}" "${docker_socket_path}"
 	)
 
+	# Validate run_args: ensure no empty arguments
+	for i in "${!run_args[@]}"; do
+		if [[ -z "${run_args[$i]}" ]]; then
+			printf 'WARNING: empty argument at index %d in run_args\n' "$i" >&2
+		fi
+	done
+	# Remove any empty arguments from run_args
+	local -a clean_args=()
+	for arg in "${run_args[@]}"; do
+		[[ -n "${arg}" ]] && clean_args+=("${arg}")
+	done
+	run_args=("${clean_args[@]}")
+
 	install_cmd="${AGENT_INSTALL_CMDS[${agent_type}]}"
 	cli_base="${AGENT_CLI_CMDS[${agent_type}]}"
 	cli_cmd="${cli_base}"
@@ -1121,6 +1166,15 @@ DOCKERFILE
 	fi
 	printf 'Runtime image:  %s\n' "${runtime_image}"
 	printf 'Launch command: %s\n' "${launch_cmd}"
+	# Ensure runtime_image contains no whitespace
+	if [[ "${runtime_image}" =~ [[:space:]] ]]; then
+		printf 'ERROR: runtime image name contains whitespace: %q\n' "${runtime_image}" >&2
+		exit 1
+	fi
+	# Warn about uppercase letters (Docker repository names must be lowercase)
+	if [[ "${runtime_image}" =~ [A-Z] ]]; then
+		printf 'WARNING: runtime image name contains uppercase letters, Docker may reject it\n' >&2
+	fi
 
 	# Detect which shell to use for the -c wrapper: prefer bash, fall back to sh
 	local shell_cmd='/bin/bash'
