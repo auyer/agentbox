@@ -398,7 +398,44 @@ function build_run_args() {
 		# user can access the socket without being root.  This works regardless
 		# of what the group is named on the host (docker, podman, root, etc.).
 		local socket_gid
-		socket_gid="$(stat -f '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]' || stat -c '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]' || true)"
+		# Determine correct stat format based on OS
+		local stat_format
+		case "$(uname)" in
+			Darwin) stat_format='-f' ;;
+			*)      stat_format='-c' ;;
+		esac
+		socket_gid="$(command stat "${stat_format}" '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]')"
+		# If empty, try the opposite format as fallback
+		if [[ -z "${socket_gid}" ]] || [[ ! "${socket_gid}" =~ ^[0-9]+$ ]]; then
+			if [[ "${stat_format}" == '-f' ]]; then
+				socket_gid="$(command stat -c '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]')"
+			else
+				socket_gid="$(command stat -f '%g' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]')"
+			fi
+		fi
+		# Check socket permissions and warn if group lacks read/write
+		local perm_octal
+		perm_octal="$(command stat "${stat_format}" '%a' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]')"
+		if [[ -z "${perm_octal}" ]] || [[ ! "${perm_octal}" =~ ^[0-7]+$ ]]; then
+			# Try opposite format
+			if [[ "${stat_format}" == '-f' ]]; then
+				perm_octal="$(command stat -c '%a' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]')"
+			else
+				perm_octal="$(command stat -f '%a' "${docker_socket_path}" 2>/dev/null | tr -d '[:space:]')"
+			fi
+		fi
+		if [[ -n "${perm_octal}" ]] && [[ "${perm_octal}" =~ ^[0-7]+$ ]]; then
+			# Get group permission digit (second last of last 3 digits)
+			local last_three="${perm_octal: -3}"
+			local group_digit="${last_three:1:1}"
+			if [[ $((group_digit & 6)) -ne 6 ]]; then
+				printf 'WARNING: Docker socket group permissions are %s (need rw). Container user may not have access.\n' "${perm_octal}" >&2
+			fi
+		fi
+		# Warn if socket owned by root group
+		if [[ "${socket_gid}" == '0' ]]; then
+			printf 'WARNING: Docker socket owned by root group (GID 0). Container user may not have access unless running as root.\n' >&2
+		fi
 		# Only add if it's a non-zero numeric value
 		if [[ -n "${socket_gid}" ]] && [[ "${socket_gid}" =~ ^[0-9]+$ ]] && [[ "${socket_gid}" != '0' ]]; then
 			args+=("--group-add=${socket_gid}")
