@@ -5,7 +5,6 @@ worktree. Each session gets its own branch, its own container, and no access
 to the rest of your repository's git history.
 It can use your Containerfile/Dockerfile for dependencies, and automatically loads a .devcontainer config if available.
 
-
 ## Overview
 
 agentbox wraps podman (or docker) to give an LLM agent a clean, reproducible
@@ -233,10 +232,9 @@ set as the container's working directory.
 |-------------------------------------------|---------------------------------|---------------------------|
 | `<worktree>`                              | `/home/agentbox/app`            | Project files, read-write |
 | `~/<agent-config-dir>`                    | `/home/agentbox/<config-dir>`   | Agent credentials/config  |
+| `<agentbox-dir>/skills/`                  | Agent‑specific skill directory        | Mounted per agent type: claude‑code→`~/.claude/skills`, qwen‑code→`~/.qwen/skills`, opencode‑ai→`~/.agents/skills`, cursor→`~/.cursor/skills` |
 | `~/.ssh/` (if present)                    | `/home/agentbox/.ssh/`          | Read-only                 |
 | `~/.ssh/known_hosts` (if present)         | `/home/agentbox/.ssh/known_hosts` | Read-only               |
-| `<agentbox-dir>/skills/`                  | `/home/agentbox/app/skills`     | If directory exists       |
-| `<agentbox-dir>/workflows/`               | `/home/agentbox/app/workflows`  | If directory exists       |
 | `<agentbox-dir>/cache/<agent>/npm-global` | `/home/agentbox/.npm-global`    | Agent installs (`npm -g`) |
 | `<agentbox-dir>/cache/<agent>/local`      | `/home/agentbox/.local`         | e.g. curl-based CLIs      |
 | Host docker/podman socket                 | `/var/run/docker.sock`          | Only with `--mount-docker-socket` |
@@ -423,8 +421,14 @@ a default, uncomment the relevant line. Example:
 ### skills/ and workflows/
 
 If a `skills/` or `workflows/` directory exists in the agentbox installation
-directory, it is mounted into the container at
-`/home/agentbox/app/skills` and `/home/agentbox/app/workflows` respectively.
+directory, it is mounted into the **Agent skill directory**: a per‑agent skill location — mounted inside the agent’s skill directory, making skills discoverable by the agent CLI. The mapping is: claude‑code→`~/.claude/skills`, qwen‑code→`~/.qwen/skills`, opencode‑ai→`~/.agents/skills`, cursor→`~/.cursor/skills`.
+
+You can also mount it to the project directory, by adding the following lines to the default_mounts config:
+
+```
+${AGENT_DIR}/skills:./skills
+${AGENT_DIR}/workflows:./workflows
+```
 
 ---
 

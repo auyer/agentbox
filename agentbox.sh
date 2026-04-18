@@ -22,6 +22,15 @@ declare -A AGENT_CONFIG_DIRS=(
 	['cursor']="${HOME}/.cursor:/home/agentbox/.cursor"
 )
 
+# Agent type → container-side skills directory
+# Skills from <agentbox-dir>/skills are mounted here for each agent
+declare -A AGENT_SKILL_DIRS=(
+	['claude-code']='/home/agentbox/.claude/skills'
+	['qwen-code']='/home/agentbox/.qwen/skills'
+	['opencode-ai']='/home/agentbox/.agents/skills'
+	['cursor']='/home/agentbox/.cursor/skills'
+)
+
 # Agent type → npm install command
 declare -A AGENT_INSTALL_CMDS=(
 	['claude-code']='curl -fsSL https://claude.ai/install.sh | bash'
@@ -410,6 +419,13 @@ function build_run_args() {
 
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
+	# Mount shared skills directory to agent's skill directory
+	local skills_host="${AGENT_DIR}/skills"
+	local skills_container="${AGENT_SKILL_DIRS[${agent_type}]}"
+	if [[ -d "${skills_host}" ]] && [[ -n "${skills_container}" ]]; then
+		args+=("--volume=${skills_host}:${skills_container}${selinux}")
+	fi
+
 	# Mounts from default_mounts.conf
 	local mount_spec
 	while IFS= read -r mount_spec; do
@@ -663,6 +679,7 @@ function cmd_start() {
 	local docker_socket_path=''
 	local keep_container=0
 	local no_devcontainer=0
+	local dry_run=0
 	local custom_image=''
 	local git_root worktree_path container_name cmd
 	local install_cmd cli_base cli_cmd
@@ -740,6 +757,10 @@ function cmd_start() {
 			BLOCK_FOLDERS+=("${1#--block-folder=}")
 			shift
 			;;
+		--dry-run)
+			dry_run=1
+			shift
+			;;
 		-*)
 			printf 'ERROR: unknown option: %s\n' "${1}" >&2
 			usage
@@ -786,6 +807,10 @@ function cmd_start() {
 		local project_name
 		project_name="$(basename "$(pwd)")"
 		container_name="agentbox-${project_name}-${sanitized_branch}"
+		if [[ "${container_name}" =~ [[:space:]] ]]; then
+			printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
+			exit 1
+		fi
 	else
 		git_root="$(get_git_root)"
 		worktree_path="${git_root}/agentbox-worktrees/${branch_name}"
@@ -793,6 +818,10 @@ function cmd_start() {
 		local project_name
 		project_name="$(basename "${git_root}")"
 		container_name="agentbox-${project_name}-${sanitized_branch}"
+		if [[ "${container_name}" =~ [[:space:]] ]]; then
+			printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
+			exit 1
+		fi
 	fi
 
 	cmd="$(detect_container_cmd)"
@@ -879,12 +908,20 @@ function cmd_start() {
 		if [[ -n "${dc_result}" ]]; then
 			if [[ "${dc_result}" == image:* ]]; then
 				custom_image="${dc_result#image:}"
+				# Trim whitespace and newline
+				custom_image="${custom_image#"${custom_image%%[![:space:]]*}"}"
+				custom_image="${custom_image%"${custom_image##*[![:space:]]}"}"
 				printf 'devcontainer: using image %s\n' "${custom_image}"
 			elif [[ "${dc_result}" == dockerfile:* ]]; then
 				local dc_rest dc_dockerfile dc_context
 				dc_rest="${dc_result#dockerfile:}"
 				dc_dockerfile="${dc_rest%% context:*}"
 				dc_context="${dc_rest#* context:}"
+				# Trim whitespace and newline
+				dc_dockerfile="${dc_dockerfile#"${dc_dockerfile%%[![:space:]]*}"}"
+				dc_dockerfile="${dc_dockerfile%"${dc_dockerfile##*[![:space:]]}"}"
+				dc_context="${dc_context#"${dc_context%%[![:space:]]*}"}"
+				dc_context="${dc_context%"${dc_context##*[![:space:]]}"}"
 				printf 'devcontainer: building from %s (context: %s)\n' \
 					"${dc_dockerfile}" "${dc_context}"
 				run_cmd "${cmd}" build \
@@ -1023,7 +1060,8 @@ DOCKERFILE
 	local cache_base="${AGENT_DIR}/cache/${agent_type}"
 	if [[ "${refresh_cache}" -eq 1 ]]; then
 		printf 'Refreshing agent tool cache at %s\n' "${cache_base}"
-		rm -rf "${cache_base}"
+		chown -R "$(id -u):$(id -g)" "${cache_base}/npm-global" "${cache_base}/local" 2>/dev/null || true
+		rm -rf "${cache_base}/npm-global" "${cache_base}/local"
 	fi
 	mkdir -p "${cache_base}/npm-global" "${cache_base}/local/bin"
 
@@ -1113,14 +1151,40 @@ DOCKERFILE
 		fi
 	fi
 
+	if [[ "${dry_run}" -eq 1 ]]; then
+		printf 'Dry run: would start container with image %s\n' "${runtime_image}"
+		printf 'Command: %s run' "${cmd}"
+		for arg in "${run_args[@]}"; do
+			printf ' %q' "${arg}"
+		done
+		printf ' %q %q -c ...\n' "${runtime_image}" "${shell_cmd}"
+		exit 0
+	fi
+
 	printf 'Starting agent container...\n'
 	if [[ -n "${custom_image}" ]]; then
 		# Cache already populated by ensure_tool_cache; skip install step.
 		# mkdir -p /home/agentbox ensures the mount-point base exists in the
 		# user's image before volumes are overlaid.
+		if [[ "${VERBOSE}" -eq 0 ]] && [[ "${cmd}" == "docker" ]]; then
+			local debug_args=("${run_args[@]}" "${runtime_image}" "${shell_cmd}" "-c" "mkdir -p /home/agentbox ${container_workdir}; ${custom_cfg_cmd}${launch_cmd}")
+			printf 'DEBUG: %s run' "${cmd}" >&2
+			for arg in "${debug_args[@]}"; do
+				printf ' %q' "${arg}" >&2
+			done
+			printf '\n' >&2
+		fi
 		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" "${shell_cmd}" -c \
 			"mkdir -p /home/agentbox ${container_workdir}; ${custom_cfg_cmd}${launch_cmd}"
 	else
+		if [[ "${VERBOSE}" -eq 0 ]] && [[ "${cmd}" == "docker" ]]; then
+			local debug_args=("${run_args[@]}" "${runtime_image}" "${shell_cmd}" "-c" "${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}")
+			printf 'DEBUG: %s run' "${cmd}" >&2
+			for arg in "${debug_args[@]}"; do
+				printf ' %q' "${arg}" >&2
+			done
+			printf '\n' >&2
+		fi
 		run_cmd "${cmd}" run "${run_args[@]}" "${runtime_image}" "${shell_cmd}" -c \
 			"${custom_cfg_cmd}${install_if_missing}; ${launch_cmd}"
 	fi
