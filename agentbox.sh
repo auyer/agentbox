@@ -22,6 +22,12 @@ declare -A AGENT_CONFIG_DIRS=(
 	['cursor']="${HOME}/.cursor:/home/agentbox/.cursor"
 )
 
+# Agent type → additional host:container config dir mounts (beyond AGENT_CONFIG_DIRS)
+# Only agents that need extra config directories listed here; others default to empty.
+declare -A AGENT_EXTRA_CONFIG_DIRS=(
+	['opencode-ai']="${HOME}/.opencode/config:/home/agentbox/.config/opencode"
+)
+
 # Agent type → container-side skills directory
 # Skills from <agentbox-dir>/skills are mounted here for each agent
 declare -A AGENT_SKILL_DIRS=(
@@ -475,6 +481,18 @@ function build_run_args() {
 
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
+	# Mount extra per-agent config directories (e.g. opencode-ai needs ~/.opencode/config)
+	local extra_config="${AGENT_EXTRA_CONFIG_DIRS[${agent_type}]:-}"
+	if [[ -n "${extra_config}" ]]; then
+		local extra_host="${extra_config%%:*}"
+		local extra_container="${extra_config#*:}"
+		extra_host="$(normalize_mount_path "${extra_host}" "${container_home}" "${container_workdir}")"
+		extra_container="$(normalize_mount_path "${extra_container}" "${container_home}" "${container_workdir}")"
+		if [[ -e "${extra_host}" ]]; then
+			args+=("--volume=${extra_host}:${extra_container}${selinux}")
+		fi
+	fi
+
 	# Mount shared skills directory to agent's skill directory, but only when
 	# it actually contains skills. Mounting an empty directory would create
 	# stray empty skill dirs inside the agent's bind-mounted config directory.
@@ -850,6 +868,15 @@ function cmd_start() {
 	if [[ ! -d "${config_dir}" ]]; then
 		printf 'Creating agent config directory: %s\n' "${config_dir}"
 		mkdir -p "${config_dir}"
+	fi
+
+	# Create extra per-agent config directory if it doesn't exist
+	local extra_config="${AGENT_EXTRA_CONFIG_DIRS[${agent_type}]:-}"
+	if [[ -n "${extra_config}" ]]; then
+		local extra_dir="${extra_config%%:*}"
+		if [[ ! -d "${extra_dir}" ]]; then
+			mkdir -p "${extra_dir}"
+		fi
 	fi
 
 	if [[ -z "${branch_name}" ]]; then
