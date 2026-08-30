@@ -76,6 +76,23 @@ function _base64_encode() {
 	base64 -w 0 < "${file}" 2>/dev/null || base64 -b 0 -i "${file}"
 }
 
+# Sanitize a string into a safe path/container-name component.
+# Replaces whitespace and disallowed characters with dashes, collapses
+# repeated dashes, and strips leading/trailing dashes. Falls back to
+# 'default' when the result would be empty.
+function _sanitize_component() {
+	local value="${1}"
+	value="${value//[[:space:]]/-}"
+	value="${value//[^a-zA-Z0-9._-]/-}"
+	while [[ "${value}" == *--* ]]; do
+		value="${value//--/-}"
+	done
+	value="${value/#-/}"
+	value="${value/%-/}"
+	[[ -z "${value}" ]] && value='default'
+	printf '%s' "${value}"
+}
+
 
 function usage() {
 	printf 'Usage: agentbox [BRANCH] [OPTIONS]\n'
@@ -862,40 +879,17 @@ function cmd_start() {
 		worktree_path="$(pwd)"
 		printf 'Running without git — mounting current directory\n'
 		# Use current directory name to make container name unique per project
-		local project_name
-		project_name="$(basename "$(pwd)")"
-		# Sanitize project name for container name
-		project_name="${project_name//[[:space:]]/-}"
-		project_name="${project_name//[^a-zA-Z0-9._-]/-}"
-		while [[ "${project_name}" == *--* ]]; do
-			project_name="${project_name//--/-}"
-		done
-		project_name="${project_name/#-/}"
-		project_name="${project_name/%-/}"
-		container_name="agentbox-${project_name}-${sanitized_branch}"
-		if [[ "${container_name}" =~ [[:space:]] ]]; then
-			printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
-			exit 1
-		fi
+		project_name="$(_sanitize_component "$(basename "$(pwd)")")"
 	else
 		git_root="$(get_git_root)"
 		worktree_path="${git_root}/agentbox-worktrees/${branch_name}"
 		# Use git root directory name to make container name unique per project
-		local project_name
-		project_name="$(basename "${git_root}")"
-		# Sanitize project name for container name
-		project_name="${project_name//[[:space:]]/-}"
-		project_name="${project_name//[^a-zA-Z0-9._-]/-}"
-		while [[ "${project_name}" == *--* ]]; do
-			project_name="${project_name//--/-}"
-		done
-		project_name="${project_name/#-/}"
-		project_name="${project_name/%-/}"
-		container_name="agentbox-${project_name}-${sanitized_branch}"
-		if [[ "${container_name}" =~ [[:space:]] ]]; then
-			printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
-			exit 1
-		fi
+		project_name="$(_sanitize_component "$(basename "${git_root}")")"
+	fi
+	container_name="agentbox-${project_name}-${sanitized_branch}"
+	if [[ "${container_name}" =~ [[:space:]] ]]; then
+		printf 'ERROR: container name contains whitespace: %q\n' "${container_name}" >&2
+		exit 1
 	fi
 
 	cmd="$(detect_container_cmd)"
