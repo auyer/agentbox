@@ -6,7 +6,7 @@
 # Values with spaces are not supported.
 
 # Agent type  (options: claude-code, qwen-code, opencode-ai, cursor)
---agent claude-code
+--agent opencode-ai
 
 # Pass --dangerously-skip-permissions to the agent CLI by default
 # --dangerously-skip-permissions

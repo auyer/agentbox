@@ -87,7 +87,7 @@ function cmd_install() {
 	# Ask for the default agent and update default-flags in place.
 	local df="${INSTALL_DIR}/default-flags"
 	if [[ -f "${df}" ]]; then
-		printf '\nDefault agent? [claude-code / qwen-code / opencode-ai / cursor]\n'
+		printf '\nDefault agent? [opencode-ai / claude-code / qwen-code / cursor]\n'
 		printf '(Press Enter to keep current default) '
 		local chosen_agent
 		read -r chosen_agent </dev/tty

@@ -375,6 +375,9 @@ Example:
 
 If a listed variable is not set on the host it is silently skipped.
 
+The agent config directory env var (e.g. `CLAUDE_CONFIG_DIR` for
+`claude-code`) is set automatically at runtime based on the `--agent` type.
+
 ### pre_start.sh
 
 A shell script sourced inside the container before the agent is installed.

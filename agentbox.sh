@@ -39,10 +39,10 @@ declare -A AGENT_INSTALL_CMDS=(
 	['cursor']='curl https://cursor.com/install -fsS | bash'
 )
 
-# Agent type → env var name that tells the agent where its config dir is.
-# The value is the container-side path from AGENT_CONFIG_DIRS at runtime,
-# so the path is never duplicated.  Empty means no config-dir env var.
-declare -A AGENT_CONFIG_ENV_VAR=(
+# Agent type → env var NAME (not value) for the agent's config directory.
+# The value is set at runtime from the container-side path in AGENT_CONFIG_DIRS.
+# Empty means no config-dir env var is needed for this agent.
+declare -A AGENT_CONFIG_ENV_NAME=(
 	['claude-code']='CLAUDE_CONFIG_DIR'
 	['qwen-code']=''
 	['opencode-ai']=''
@@ -87,7 +87,7 @@ function usage() {
 	printf 'Options:\n'
 	printf '  BRANCH                    Branch name'
 	printf ' (default: agentbox-<date>)\n'
-	printf '  -a, --agent <type>        Agent type (default: claude-code)\n'
+	printf '  -a, --agent <type>        Agent type (default: opencode-ai)\n'
 	printf '                            Options: claude-code, qwen-code,\n'
 	printf '                            opencode-ai, cursor\n'
 	printf '  -s, --use-stash           Stash current changes and apply\n'
@@ -363,11 +363,12 @@ function build_run_args() {
 		args+=('--rm')
 	fi
 
-	# If this agent type uses an env var to locate its config dir, set it
-	# to the container-side path extracted from AGENT_CONFIG_DIRS above.
-	local config_env_var="${AGENT_CONFIG_ENV_VAR[${agent_type}]:-}"
-	if [[ -n "${config_env_var}" ]]; then
-		args+=("--env=${config_env_var}=${container_config_dir}")
+	# Export the agent config env var so the auto_envs.conf loop below
+	# picks it up. This unifies config dir forwarding with the standard
+	# env-var-forwarding mechanism.
+	local config_env_name="${AGENT_CONFIG_ENV_NAME[${agent_type}]:-}"
+	if [[ -n "${config_env_name}" ]]; then
+		export "${config_env_name}=${container_config_dir}"
 	fi
 
 	# Always run as the host user so the process is never root.
@@ -457,10 +458,13 @@ function build_run_args() {
 
 	args+=("--volume=${config_dir}:${container_config_dir}${selinux}")
 
-	# Mount shared skills directory to agent's skill directory
+	# Mount shared skills directory to agent's skill directory, but only when
+	# it actually contains skills. Mounting an empty directory would create
+	# stray empty skill dirs inside the agent's bind-mounted config directory.
 	local skills_host="${AGENT_DIR}/skills"
 	local skills_container="${AGENT_SKILL_DIRS[${agent_type}]}"
-	if [[ -d "${skills_host}" ]] && [[ -n "${skills_container}" ]]; then
+	if [[ -d "${skills_host}" ]] && [[ -n "${skills_container}" ]] &&
+		[[ -n "$(ls -A "${skills_host}" 2>/dev/null)" ]]; then
 		args+=("--volume=${skills_host}:${skills_container}${selinux}")
 	fi
 
@@ -723,7 +727,7 @@ function cmd_start() {
 	local install_cmd cli_base cli_cmd
 	local -a run_args
 
-	local agent_type='claude-code'
+	local agent_type='opencode-ai'
 
 	while [[ $# -gt 0 ]]; do
 		case "${1}" in
@@ -853,6 +857,7 @@ function cmd_start() {
 		sanitized_branch='default'
 	fi
 
+	local project_name
 	if [[ "${no_git}" -eq 1 ]]; then
 		worktree_path="$(pwd)"
 		printf 'Running without git — mounting current directory\n'
@@ -962,7 +967,9 @@ function cmd_start() {
 		"${AGENT_DIR}"
 
 	local container_home='/home/agentbox'
-	local container_workdir='/home/agentbox/app'
+	# Use a project-specific workdir instead of a shared /home/agentbox/app so
+	# each project maps to a distinct path inside the container.
+	local container_workdir="/home/agentbox/${project_name:-app}"
 
 	# Auto-detect devcontainer image if --image was not explicitly provided.
 	if [[ -z "${custom_image}" ]] && [[ "${no_devcontainer}" -eq 0 ]]; then
