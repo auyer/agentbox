@@ -5,10 +5,11 @@ ARG GROUP_ID=1000
 
 USER root
 RUN apt update && apt install -y \
-	git \
-	openssh-client \
-	curl \
-	jq
+    git \
+    busybox \
+    openssh-client \
+    curl \
+    jq
 
 ENV HOME=/home/agentbox
 
@@ -18,10 +19,10 @@ RUN npm config set prefix /home/agentbox/.npm-global
 ENV PATH="/home/agentbox/.local/bin:/home/agentbox/.npm-global/bin:${PATH}"
 
 RUN mkdir -p /home/agentbox/.cache \
-	/home/agentbox/.config \
-	/home/agentbox/.ssh \
-	/home/agentbox/.local/bin \
-	/home/agentbox/.npm-global
+    /home/agentbox/.config \
+    /home/agentbox/.ssh \
+    /home/agentbox/.local/bin \
+    /home/agentbox/.npm-global
 RUN chown -R ${USER_ID}:${GROUP_ID} /home/agentbox
 
 # Create the agentbox user/group for the target UID/GID so that
@@ -32,6 +33,6 @@ RUN getent group  ${GROUP_ID} >/dev/null 2>&1 \
     || groupadd --gid ${GROUP_ID} agentbox 2>/dev/null || true; \
     getent passwd ${USER_ID} >/dev/null 2>&1 \
     || useradd --uid ${USER_ID} --gid ${GROUP_ID} \
-               --home-dir /home/agentbox --no-create-home \
-               --shell /bin/bash agentbox 2>/dev/null || true
+    --home-dir /home/agentbox --no-create-home \
+    --shell /bin/bash agentbox 2>/dev/null || true
 
