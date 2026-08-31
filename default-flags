@@ -5,7 +5,7 @@
 # Lines starting with # and blank lines are ignored.
 # Values with spaces are not supported.
 
-# Agent type  (options: claude-code, qwen-code, opencode-ai, cursor)
+# Agent type  (options: claude-code, qwen-code, opencode-ai, cursor, pi)
 --agent opencode-ai
 
 # Pass --dangerously-skip-permissions to the agent CLI by default

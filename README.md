@@ -75,7 +75,7 @@ that mode.
 
     -a, --agent <type>
 
-The agent to install and launch. Defaults to `claude-code`.
+The agent to install and launch. Defaults to `opencode-ai`.
 
 | Value         | Installed package                          | CLI binary  | Config dir        |
 |---------------|--------------------------------------------|-------------|-------------------|
@@ -83,6 +83,7 @@ The agent to install and launch. Defaults to `claude-code`.
 | qwen-code     | @qwen-code/qwen-code@latest                | qwen        | ~/.qwen           |
 | opencode-ai   | opencode-ai                                | opencode    | ~/.opencode       |
 | cursor        | cursor.com/install                         | cursor      | ~/.cursor         |
+| pi            | @earendil-works/pi-coding-agent@latest    | pi          | ~/.pi             |
 
 The agent config directory is mounted read-write into the container so that
 credentials and settings persist across sessions.
@@ -257,6 +258,7 @@ The following variables are set inside the container:
 |---------------------|--------------------------------|
 | `HOME`              | `/home/agentbox`               |
 | `CLAUDE_CONFIG_DIR` | `/home/agentbox/.claude`       |
+| `PI_CONFIG_DIR`     | `/home/agentbox/.pi`           |
 | `NPM_CONFIG_PREFIX` | `/home/agentbox/.npm-global`   |
 
 Additional variables are forwarded from the host via `auto_envs.conf` (see
@@ -344,7 +346,7 @@ starting the container:
 
 - Your image's toolchain is fully preserved and available in `PATH` (e.g.
   `cargo`, `go`, system packages).
-- The agent CLI (`claude`, `qwen`, etc.) is installed and on `PATH`.
+- The agent CLI (`claude`, `qwen`, `pi`, etc.) is installed and on `PATH`.
 - The project is mounted at `/home/agentbox/app` (the working directory).
 - Agent config and credentials are mounted from the host as usual.
 
@@ -424,7 +426,7 @@ a default, uncomment the relevant line. Example:
 ### skills/ and workflows/
 
 If a `skills/` or `workflows/` directory exists in the agentbox installation
-directory, it is mounted into the **Agent skill directory**: a per‑agent skill location — mounted inside the agent’s skill directory, making skills discoverable by the agent CLI. The mapping is: claude‑code→`~/.claude/skills`, qwen‑code→`~/.qwen/skills`, opencode‑ai→`~/.agents/skills`, cursor→`~/.cursor/skills`.
+directory, it is mounted into the **Agent skill directory**: a per‑agent skill location — mounted inside the agent’s skill directory, making skills discoverable by the agent CLI. The mapping is: claude‑code→`~/.claude/skills`, qwen‑code→`~/.qwen/skills`, opencode‑ai→`~/.agents/skills`, cursor→`~/.cursor/skills`, pi→`~/.pi/skills`.
 
 You can also mount it to the project directory, by adding the following lines to the default_mounts config:
 
@@ -444,7 +446,7 @@ Completion includes:
 
 - Subcommands: `start`, `help`
 - Options: `-v`, `--verbose`, `-s`, `--use-stash`, `--agent`, etc.
-- Agent types: `claude-code`, `qwen-code`, `opencode-ai`, `cursor`
+- Agent types: `claude-code`, `qwen-code`, `opencode-ai`, `cursor`, `pi`
 - File path suggestions for `--image`
 
 ### Manual Setup

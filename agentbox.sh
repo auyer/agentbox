@@ -20,6 +20,7 @@ declare -A AGENT_CONFIG_DIRS=(
 	['qwen-code']="${HOME}/.qwen:/home/agentbox/.qwen"
 	['opencode-ai']="${HOME}/.opencode:/home/agentbox/.local/share/opencode"
 	['cursor']="${HOME}/.cursor:/home/agentbox/.cursor"
+	['pi']="${HOME}/.pi:/home/agentbox/.pi"
 )
 
 # Agent type → additional host:container config dir mounts (beyond AGENT_CONFIG_DIRS)
@@ -35,14 +36,16 @@ declare -A AGENT_SKILL_DIRS=(
 	['qwen-code']='/home/agentbox/.qwen/skills'
 	['opencode-ai']='/home/agentbox/.agents/skills'
 	['cursor']='/home/agentbox/.cursor/skills'
+	['pi']='/home/agentbox/.pi/skills'
 )
 
-# Agent type → npm install command
+# Agent type → install command
 declare -A AGENT_INSTALL_CMDS=(
 	['claude-code']='curl -fsSL https://claude.ai/install.sh | bash'
 	['qwen-code']='npm install -g @qwen-code/qwen-code@latest'
 	['opencode-ai']='npm i -g opencode-ai'
 	['cursor']='curl https://cursor.com/install -fsS | bash'
+	['pi']='npm install -g @earendil-works/pi-coding-agent@latest'
 )
 
 # Agent type → env var NAME (not value) for the agent's config directory.
@@ -61,6 +64,18 @@ declare -A AGENT_CLI_CMDS=(
 	['qwen-code']='qwen'
 	['opencode-ai']='opencode'
 	['cursor']='cursor-agent'
+	['pi']='pi'
+)
+
+# Agent type → env var NAME (not value) for the agent's config directory.
+# The value is set at runtime from the container-side path in AGENT_CONFIG_DIRS.
+# Empty means no config-dir env var is needed for this agent.
+declare -A AGENT_CONFIG_ENV_NAME=(
+	['claude-code']='CLAUDE_CONFIG_DIR'
+	['qwen-code']=''
+	['opencode-ai']=''
+	['cursor']=''
+	['pi']='PI_CONFIG_DIR'
 )
 
 # Compatibility helper: realpath works on Linux but not macOS
